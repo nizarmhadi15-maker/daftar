@@ -24,6 +24,9 @@ jobs:
           cp index.html app/src/main/assets/index.html
           curl -sfL https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js -o app/src/main/assets/xlsx.full.min.js
           sed -i 's#https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js#xlsx.full.min.js#' app/src/main/assets/index.html
+          curl -sfL https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js -o app/src/main/assets/pdf.min.js
+          curl -sfL https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js -o app/src/main/assets/pdf.worker.min.js
+          sed -i 's#https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/##' app/src/main/assets/index.html
           sed -i 's#دفتر الدين#رسائل نزر#g' app/src/main/assets/index.html
           mkdir -p app/src/main/res/drawable
           cp icon.png app/src/main/res/drawable/icon.png
@@ -53,8 +56,8 @@ jobs:
               applicationId 'com.nizar.daftar'
               minSdk 23
               targetSdk 34
-              versionCode 2
-              versionName '1.1'
+              versionCode 3
+              versionName '1.2'
             }
             compileOptions {
               sourceCompatibility JavaVersion.VERSION_17
@@ -66,6 +69,7 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.SEND_SMS"/>
+            <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
             <uses-permission android:name="android.permission.INTERNET"/>
             <application android:label="رسائل نزر" android:icon="@drawable/icon" android:theme="@android:style/Theme.Material.Light.NoActionBar">
               <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden" android:windowSoftInputMode="adjustResize">
@@ -79,14 +83,21 @@ jobs:
           EOF
           cat > app/src/main/java/com/nizar/daftar/MainActivity.java <<'EOF'
           package com.nizar.daftar;
-
+          
           import android.Manifest;
           import android.app.Activity;
+          import android.content.Context;
           import android.content.Intent;
           import android.content.pm.PackageManager;
           import android.net.Uri;
+          import android.os.Build;
           import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
           import android.telephony.SmsManager;
+          import android.telephony.SubscriptionInfo;
+          import android.telephony.SubscriptionManager;
+          import android.view.WindowManager;
           import android.webkit.JavascriptInterface;
           import android.webkit.ValueCallback;
           import android.webkit.WebChromeClient;
@@ -94,14 +105,31 @@ jobs:
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
           import java.util.ArrayList;
-
+          import java.util.List;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+          
           public class MainActivity extends Activity {
             private WebView web;
             private ValueCallback<Uri[]> fileCb;
-
+          
+            // The sending queue lives at class level so it survives the screen being rebuilt.
+            private static MainActivity current;
+            private static final Handler batchH = new Handler(Looper.getMainLooper());
+            private static JSONArray bq = new JSONArray();
+            private static JSONArray bResults = new JSONArray();
+            private static int bIdx = 0, bTotal = 0;
+            private static long bGap = 60000, bStarted = 0, bNextAt = 0;
+            private static String bSub = "";
+            private static boolean bRunning = false;
+            private static final Runnable bStep = new Runnable() {
+              @Override public void run() { batchStep(); }
+            };
+          
             @Override
             protected void onCreate(Bundle b) {
               super.onCreate(b);
+              current = this;
               web = new WebView(this);
               setContentView(web);
               WebSettings s = web.getSettings();
@@ -118,22 +146,39 @@ jobs:
                   Intent i = new Intent(Intent.ACTION_GET_CONTENT);
                   i.addCategory(Intent.CATEGORY_OPENABLE);
                   i.setType("*/*");
-                  startActivityForResult(Intent.createChooser(i, "اختر ملف Excel"), 1);
+                  startActivityForResult(Intent.createChooser(i, "اختر ملف Excel أو PDF"), 1);
                   return true;
                 }
               });
               web.loadUrl("file:///android_asset/index.html");
-              if (!granted()) askSms();
+              if (bRunning) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+              if (!granted() || !phoneGranted()) askSms();
             }
-
+          
+            @Override
+            protected void onDestroy() {
+              if (current == this) current = null;
+              super.onDestroy();
+            }
+          
             private boolean granted() {
               return checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED;
             }
-
-            private void askSms() {
-              requestPermissions(new String[]{Manifest.permission.SEND_SMS}, 2);
+          
+            private boolean phoneGranted() {
+              return checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED;
             }
-
+          
+            private void askSms() {
+              requestPermissions(new String[]{Manifest.permission.SEND_SMS, Manifest.permission.READ_PHONE_STATE}, 2);
+            }
+          
+            @Override
+            public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+              super.onRequestPermissionsResult(req, perms, res);
+              js("window.onSimPermission&&window.onSimPermission()");
+            }
+          
             @Override
             protected void onActivityResult(int req, int res, Intent data) {
               if (req == 1 && fileCb != null) {
@@ -143,29 +188,170 @@ jobs:
                 fileCb = null;
               }
             }
-
+          
             @Override
             public void onBackPressed() {
+              if (bRunning) { moveTaskToBack(true); return; }
               if (web.canGoBack()) web.goBack(); else super.onBackPressed();
             }
-
+          
+            private List<SubscriptionInfo> activeSims() {
+              SubscriptionManager sm = (SubscriptionManager) getSystemService(TELEPHONY_SUBSCRIPTION_SERVICE);
+              List<SubscriptionInfo> l = sm == null ? null : sm.getActiveSubscriptionInfoList();
+              return l == null ? new ArrayList<SubscriptionInfo>() : l;
+            }
+          
+            private boolean sleeping() {
+              return getSharedPreferences("nazr", Context.MODE_PRIVATE).getBoolean("sleep", false);
+            }
+          
+            private String sendTo(String phone, String msg, String sub) {
+              if (sleeping()) return "sleep";
+              if (!granted()) return "no-permission";
+              try {
+                SmsManager sm;
+                if (sub == null || sub.isEmpty()) {
+                  sm = SmsManager.getDefault();
+                } else {
+                  int id = Integer.parseInt(sub);
+                  if (phoneGranted()) {
+                    boolean found = false;
+                    for (SubscriptionInfo i : activeSims()) if (i.getSubscriptionId() == id) found = true;
+                    if (!found) return "no-sim";
+                  }
+                  if (Build.VERSION.SDK_INT >= 31) sm = getSystemService(SmsManager.class).createForSubscriptionId(id);
+                  else sm = SmsManager.getSmsManagerForSubscriptionId(id);
+                }
+                ArrayList<String> parts = sm.divideMessage(msg);
+                sm.sendMultipartTextMessage(phone, null, parts, null, null);
+                return "ok";
+              } catch (Exception e) {
+                return "error";
+              }
+            }
+          
+            private static void js(String code) {
+              MainActivity a = current;
+              if (a != null && a.web != null) a.web.evaluateJavascript(code, null);
+            }
+          
+            private static void batchStep() {
+              if (!bRunning) return;
+              MainActivity a = current;
+              if (bIdx >= bTotal) { batchFinish(true); return; }
+              if (a == null) { batchH.postDelayed(bStep, 5000); return; }
+              String id = "";
+              String r;
+              try {
+                JSONObject o = bq.getJSONObject(bIdx);
+                id = o.getString("id");
+                r = a.sendTo(o.getString("phone"), o.getString("msg"), bSub);
+              } catch (Exception e) {
+                r = "error";
+              }
+              try {
+                JSONObject x = new JSONObject();
+                x.put("id", id);
+                x.put("r", r);
+                bResults.put(x);
+              } catch (Exception e) { }
+              int i = bIdx;
+              bIdx++;
+              boolean stopNow = r.equals("no-permission") || r.equals("no-sim") || r.equals("sleep");
+              boolean more = bIdx < bTotal && !stopNow;
+              bNextAt = more ? System.currentTimeMillis() + bGap : 0;
+              js("window.onBatchItem&&window.onBatchItem(" + JSONObject.quote(id) + "," + JSONObject.quote(r) + "," + i + "," + bTotal + "," + bNextAt + ")");
+              if (more) batchH.postDelayed(bStep, bGap); else batchFinish(true);
+            }
+          
+            private static void batchFinish(boolean notify) {
+              bRunning = false;
+              batchH.removeCallbacks(bStep);
+              MainActivity a = current;
+              if (a != null) a.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+              if (notify) js("window.onBatchDone&&window.onBatchDone()");
+            }
+          
             class Bridge {
               @JavascriptInterface
               public String hasPermission() { return granted() ? "yes" : "no"; }
-
+          
               @JavascriptInterface
               public void askPermission() { runOnUiThread(() -> askSms()); }
-
+          
               @JavascriptInterface
-              public String send(String phone, String msg) {
-                if (!granted()) return "no-permission";
+              public void askPhonePermission() {
+                runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.READ_PHONE_STATE}, 3));
+              }
+          
+              @JavascriptInterface
+              public String send(String phone, String msg) { return sendTo(phone, msg, ""); }
+          
+              @JavascriptInterface
+              public String sendVia(String phone, String msg, String sub) { return sendTo(phone, msg, sub); }
+          
+              @JavascriptInterface
+              public String listSims() {
+                if (!phoneGranted()) return "no-permission";
                 try {
-                  SmsManager sm = SmsManager.getDefault();
-                  ArrayList<String> parts = sm.divideMessage(msg);
-                  sm.sendMultipartTextMessage(phone, null, parts, null, null);
-                  return "ok";
+                  JSONArray a = new JSONArray();
+                  for (SubscriptionInfo i : activeSims()) {
+                    JSONObject o = new JSONObject();
+                    o.put("id", i.getSubscriptionId());
+                    o.put("slot", i.getSimSlotIndex());
+                    o.put("name", String.valueOf(i.getDisplayName()));
+                    o.put("carrier", String.valueOf(i.getCarrierName()));
+                    a.put(o);
+                  }
+                  return a.toString();
                 } catch (Exception e) {
-                  return "error";
+                  return "[]";
+                }
+              }
+          
+              @JavascriptInterface
+              public void startBatch(String json, long gap, String sub) {
+                runOnUiThread(() -> {
+                  if (bRunning) return;
+                  try { bq = new JSONArray(json); } catch (Exception e) { bq = new JSONArray(); }
+                  bIdx = 0;
+                  bTotal = bq.length();
+                  bGap = gap < 1000 ? 60000 : gap;
+                  bSub = sub == null ? "" : sub;
+                  bResults = new JSONArray();
+                  bStarted = System.currentTimeMillis();
+                  bNextAt = 0;
+                  bRunning = true;
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                  batchH.removeCallbacks(bStep);
+                  batchH.post(bStep);
+                });
+              }
+          
+              @JavascriptInterface
+              public String isSleep() { return sleeping() ? "yes" : "no"; }
+          
+              @JavascriptInterface
+              public void setSleep(boolean on) {
+                getSharedPreferences("nazr", Context.MODE_PRIVATE).edit().putBoolean("sleep", on).apply();
+                if (on) runOnUiThread(() -> { if (bRunning) batchFinish(false); });
+              }
+          
+              @JavascriptInterface
+              public void stopBatch() { runOnUiThread(() -> { if (bRunning) batchFinish(false); }); }
+          
+              @JavascriptInterface
+              public String batchInfo() {
+                try {
+                  JSONObject o = new JSONObject();
+                  o.put("running", bRunning);
+                  o.put("total", bTotal);
+                  o.put("startedAt", bStarted);
+                  o.put("nextAt", bNextAt);
+                  o.put("results", new JSONArray(bResults.toString()));
+                  return o.toString();
+                } catch (Exception e) {
+                  return "{}";
                 }
               }
             }
