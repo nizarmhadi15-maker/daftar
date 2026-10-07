@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>دفتر الدين</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#E9EEEA; --paper:#F8FAF7; --ink:#1B2A24; --muted:#5E6E67; --line:#C9D4CD;
+  --pen:#2340A8; --pen-soft:#DCE3F7; --debt:#A8261C; --debt-soft:#F6DEDB; --paid:#1C6E46; --paid-soft:#D8EEE2;
+  --shadow:0 1px 0 rgba(27,42,36,.08);
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#121A17; --paper:#1A2420; --ink:#E4ECE7; --muted:#93A39C; --line:#2C3A34;
+    --pen:#8FA5F2; --pen-soft:#232F55; --debt:#F08A80; --debt-soft:#3A1F1C; --paid:#78C99C; --paid-soft:#173226;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121A17; --paper:#1A2420; --ink:#E4ECE7; --muted:#93A39C; --line:#2C3A34;
+  --pen:#8FA5F2; --pen-soft:#232F55; --debt:#F08A80; --debt-soft:#3A1F1C; --paid:#78C99C; --paid-soft:#173226;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font-family:"Readex Pro",Tahoma,"Segoe UI",Arial,sans-serif;font-size:16px;line-height:1.55}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--pen);outline-offset:2px}
+.wrap{max-width:640px;margin:0 auto;padding:16px 16px 180px}
+
+/* header: the running total, written like the bottom line of a ledger page */
+header{padding:8px 4px 18px;border-bottom:2px solid var(--ink);margin-bottom:14px}
+.shop{font-size:14px;color:var(--muted);margin:0}
+.total{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:2px}
+.total b{font-size:44px;font-weight:700;letter-spacing:-.5px;color:var(--debt);font-variant-numeric:tabular-nums;line-height:1.1}
+.total span{color:var(--muted);font-size:15px}
+
+.search{display:flex;gap:8px;margin-bottom:10px}
+.search input{flex:1;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:8px}
+.chip{border:1px solid var(--line);background:transparent;border-radius:999px;padding:6px 14px;white-space:nowrap;font-size:14px}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+/* ledger rows */
+.list{background:var(--paper);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.row{display:grid;grid-template-columns:1fr auto;gap:2px 12px;padding:13px 16px;border-bottom:1px solid var(--line);width:100%;text-align:right;background:none;border-left:0;border-right:0;border-top:0}
+.row:last-child{border-bottom:0}
+.row .n{font-weight:500}
+.row .m{font-size:13px;color:var(--muted);grid-column:1}
+.row .amt{grid-row:1/3;grid-column:2;align-self:center;font-weight:700;font-variant-numeric:tabular-nums;font-size:18px}
+.amt.due{color:var(--debt)} .amt.clear{color:var(--paid)}
+.empty{padding:28px 18px;text-align:center;color:var(--muted)}
+.empty button{margin-top:10px}
+
+.btn{border:0;border-radius:10px;padding:12px 18px;font-weight:500;background:var(--pen);color:#fff}
+.btn.ghost{background:transparent;color:var(--pen);border:1px solid var(--pen)}
+.btn.red{background:var(--debt);color:#fff}
+.btn.green{background:var(--paid);color:#fff}
+.btn.quiet{background:transparent;color:var(--muted);border:1px solid var(--line)}
+.btn.big{width:100%;padding:16px;font-size:17px}
+.btn:disabled{opacity:.45}
+
+.fab{position:fixed;left:18px;bottom:calc(140px + env(safe-area-inset-bottom,0px));width:58px;height:58px;border-radius:50%;border:0;background:var(--pen);color:#fff;font-size:30px;line-height:1;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+
+#foot{position:fixed;bottom:0;left:0;right:0;z-index:5;background:var(--paper);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+#sendBar{max-width:640px;margin:0 auto;padding:8px 16px 0;display:flex;gap:8px;align-items:center}
+#sendBar .btn{flex:1;padding:12px}
+#sendBar .info{flex:1;font-size:14px;line-height:1.4}
+#sendBar .info small{display:block;color:var(--muted)}
+nav.tabs{display:flex;background:var(--paper)}
+nav.tabs button{flex:1;border:0;background:none;padding:12px 4px 14px;font-size:14px;color:var(--muted);border-top:3px solid transparent}
+nav.tabs button[aria-current="page"]{color:var(--ink);border-top-color:var(--pen);font-weight:500}
+
+/* sheets */
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;z-index:10}
+.sheet-bg.open{display:block}
+.sheet{position:fixed;left:0;right:0;bottom:0;max-height:90%;overflow:auto;background:var(--paper);border-radius:18px 18px 0 0;padding:18px 18px calc(22px + env(safe-area-inset-bottom,0px));transform:translateY(100%);transition:transform .22s ease;z-index:11;max-width:640px;margin:0 auto}
+.sheet.open{transform:none}
+@media (prefers-reduced-motion:reduce){.sheet{transition:none}}
+.sheet h2{margin:0 0 4px;font-size:22px}
+.sheet .sub{color:var(--muted);margin:0 0 14px;font-size:14px}
+label{display:block;font-size:14px;color:var(--muted);margin:12px 0 4px}
+.field{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+textarea.field{min-height:110px;resize:vertical;line-height:1.6}
+.ltr{direction:ltr;text-align:right}
+.actions{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.actions .btn{flex:1}
+.bal{font-size:38px;font-weight:700;font-variant-numeric:tabular-nums;margin:6px 0 10px}
+
+.hist{margin-top:16px;border-top:1px solid var(--line)}
+.h{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px dashed var(--line);font-size:14px}
+.h .d{color:var(--muted);font-size:12px}
+.h .v{font-variant-numeric:tabular-nums;font-weight:500;white-space:nowrap}
+.h .v.plus{color:var(--debt)} .h .v.minus{color:var(--paid)} .h .v.sms{color:var(--pen)}
+
+/* round */
+.card{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:18px}
+.progress{height:6px;background:var(--line);border-radius:6px;overflow:hidden;margin:6px 0 16px}
+.progress i{display:block;height:100%;background:var(--pen)}
+.preview{background:var(--bg);border-radius:10px;padding:12px 14px;white-space:pre-wrap;font-size:15px;margin:12px 0}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:14px}
+.seg button{flex:1;border:0;background:transparent;padding:10px}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.note{font-size:13px;color:var(--muted)}
+.section{margin-bottom:22px}
+.section h3{margin:0 0 6px;font-size:17px}
+.toast{position:fixed;bottom:calc(210px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:10px 18px;border-radius:999px;font-size:14px;z-index:20;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:1}
+.ok{color:var(--paid)}
+#sleepOv{position:fixed;inset:0;z-index:30;background:#16213F;color:#E7ECFA;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px 24px calc(24px + env(safe-area-inset-bottom,0px))}
+#sleepOv[hidden]{display:none}
+#sleepOv h2{margin:18px 0 6px;font-size:24px}
+#sleepOv p{margin:0 0 28px;color:#AEB9DA;max-width:320px}
+#sleepOv .btn{max-width:320px;background:#F2B628;color:#16213F}
+#sleepOv .moon{width:84px;height:84px;border-radius:50%;box-shadow:-18px 10px 0 0 #F2B628;transform:translateX(9px)}
+.sleepbtn{flex:0 0 auto!important;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:10px;padding:12px 14px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><p class="empty">جارٍ التحميل…</p></div>
+
+<button class="fab" id="fab" aria-label="إضافة زبون" hidden>+</button>
+<div id="foot"><div id="sendBar"></div>
+<nav class="tabs" id="tabs">
+  <button data-tab="list" aria-current="page">الزبائن</button>
+  <button data-tab="round">إرسال التذكير</button>
+  <button data-tab="settings">الإعدادات</button>
+</nav></div>
+
+<div class="sheet-bg" id="sheetBg"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true"></div>
+<div class="toast" id="toast" role="status"></div>
+<div id="sleepOv" hidden>
+  <div class="moon" aria-hidden="true"></div>
+  <h2>التطبيق في وضع السكون</h2>
+  <p>لن تخرج أي رسالة، ولا يمكن تعديل الديون، حتى ترفع وضع السكون.</p>
+  <button class="btn big" id="wakeBtn">رفع وضع السكون</button>
+</div>
+
+<script>
+(function(){
+"use strict";
+const CYCLES={weekly:"أسبوعي",monthly:"شهري",other:"آخر"};
+const DEFAULT_SETTINGS={
+  shop:"سوبر ماركت",
+  currency:"شيكل",
+  template:"مرحباً {الاسم}، تذكير من {المحل}: رصيد الدين المستحق عليك {المبلغ} {العملة} حتى تاريخ {التاريخ}. شكراً لتعاملك معنا."
+};
+let state={debtors:{},settings:{...DEFAULT_SETTINGS}};
+let tab="list", filter="all", query="";
+let roundCycle="weekly", roundSkipped=new Set();
+let backend=null;
+const NATIVE=window.AndroidSms||null;
+const CAN_PICK_SIM=!!(NATIVE&&NATIVE.listSims&&NATIVE.sendVia);
+function getSims(){
+  if(!CAN_PICK_SIM) return null;
+  try{const r=NATIVE.listSims();if(r==="no-permission") return "no-permission";return JSON.parse(r)}catch(e){return []}
+}
+function simLabel(s){return "شريحة "+(s.slot+1)+(s.carrier&&s.carrier!=="null"?" · "+s.carrier:(s.name?" · "+s.name:""))}
+function chosenSimLabel(){
+  const id=state.settings.simId;
+  if(!CAN_PICK_SIM||id===undefined||id===null||id==="") return "الشريحة الافتراضية في الجوال";
+  const sims=getSims();
+  const s=Array.isArray(sims)?sims.find(x=>String(x.id)===String(id)):null;
+  return s?simLabel(s):"الشريحة المختارة";
+}
+function isSleeping(){return !!state.settings.sleep}
+async function setSleep(on){
+  if(on&&auto.running) stopAll();
+  state.settings={...state.settings,sleep:!!on};
+  if(NATIVE&&NATIVE.setSleep) NATIVE.setSleep(!!on);
+  closeSheet();await backend.saveSettings();applySleep();render();
+  toast(on?"التطبيق في وضع السكون":"رُفع وضع السكون");
+}
+function applySleep(){const ov=$("#sleepOv");if(ov) ov.hidden=!isSleeping()}
+function nativeSend(phone,msg){
+  if(isSleeping()) return "sleep";
+  const id=state.settings.simId;
+  if(CAN_PICK_SIM&&id!==undefined&&id!==null&&id!=="") return NATIVE.sendVia(phone,msg,String(id));
+  return NATIVE.send(phone,msg);
+}
+function sendErrorText(r){
+  if(r==="sleep") return "التطبيق في وضع السكون، ارفعه أولاً";
+  if(r==="no-sim") return "الشريحة المختارة غير موجودة في الجوال، اختر شريحة من الإعدادات";
+  if(r==="no-permission") return "اسمح للتطبيق بإرسال الرسائل ثم أعد المحاولة";
+  return "فشل الإرسال، تحقق من الرصيد والشبكة";
+}
+let auto={running:false,sent:0,failed:0,total:0,current:"",nextAt:0};
+const GAP_MS=30*1000;
+const NATIVE_BATCH=!!(NATIVE&&NATIVE.startBatch);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms)); // {saveDebtor, deleteDebtor, saveSettings}
+
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt=n=>{const v=Math.round((Number(n)||0)*100)/100;return v.toLocaleString("en-US",{maximumFractionDigits:2})};
+const today=()=>new Date().toLocaleDateString("en-GB");
+const dstr=t=>new Date(t).toLocaleDateString("en-GB")+" "+new Date(t).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+const cleanPhone=p=>String(p||"").replace(/[^\d+]/g,"").replace(/[٠-٩]/g,d=>"٠١٢٣٤٥٦٧٨٩".indexOf(d));
+const toNum=v=>Number(String(v||"").replace(/[٠-٩]/g,d=>"٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d.\-]/g,""))||0;
+
+function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.add("show");clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove("show"),2200)}
+
+/* ---------- storage: private cloud rows when available, phone storage otherwise ---------- */
+function localBackend(){
+  const KEY="debt-ledger-v1";
+  try{const raw=localStorage.getItem(KEY);if(raw){const p=JSON.parse(raw);state.debtors=p.debtors||{};state.settings={...DEFAULT_SETTINGS,...(p.settings||{})}}}catch(e){}
+  const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){toast("تعذّر الحفظ على هذا الجهاز")}};
+  return{saveDebtor:async()=>persist(),deleteDebtor:async()=>persist(),saveSettings:async()=>persist(),kind:"local"};
+}
+async function dbBackend(db,userId){
+  const base=db.doc("data/users/"+userId+"/shop");
+  const col=base.collection("debtors");
+  const setDoc=db.doc("data/users/"+userId+"/settings");
+  const [snap,sSnap]=await Promise.all([col.get(),setDoc.get()]);
+  snap.docs.forEach(d=>{if(d.exists){const v=d.data();state.debtors[d.id]={...v,id:d.id}}});
+  if(sSnap.exists) state.settings={...DEFAULT_SETTINGS,...sSnap.data()};
+  const queues={};
+  const serial=(key,fn)=>{queues[key]=(queues[key]||Promise.resolve()).then(fn).catch(()=>toast("لم يُحفظ التغيير، تحقق من الاتصال"));return queues[key]};
+  return{
+    kind:"cloud",
+    saveDebtor:d=>serial(d.id,()=>{const copy=JSON.parse(JSON.stringify(d));delete copy.id;return col.doc(d.id).set(copy)}),
+    deleteDebtor:id=>serial(id,()=>col.doc(id).delete()),
+    saveSettings:()=>serial("__s",()=>setDoc.set({...state.settings}))
+  };
+}
+async function initStorage(){
+  let db=null,u=null;
+  if(window.claude&&typeof window.claude.use==="function"){
+    try{[db,u]=await Promise.all([window.claude.use("db"),window.claude.use("user")])}catch(e){}
+  }
+  if(db&&u){
+    try{const id=await u.id();if(id){backend=await dbBackend(db,id);return}}catch(e){}
+  }
+  backend=localBackend();
+}
+
+/* ---------- helpers ---------- */
+function list(){return Object.values(state.debtors).sort((a,b)=>(b.balance||0)-(a.balance||0)||a.name.localeCompare(b.name,"ar"))}
+function msgFor(d){
+  const s=state.settings;
+  return s.template
+    .replaceAll("{الاسم}",d.name).replaceAll("{المحل}",s.shop)
+    .replaceAll("{المبلغ}",fmt(d.balance)).replaceAll("{العملة}",s.currency)
+    .replaceAll("{التاريخ}",today());
+}
+function smsLink(d){return "sms:"+cleanPhone(d.phone)+"?body="+encodeURIComponent(msgFor(d))}
+function pushHist(d,entry){d.history=[entry,...(d.history||[])].slice(0,60)}
+function remindedRecently(d){
+  if(!d.lastSent) return false;
+  return (Date.now()-d.lastSent)/864e5<6;
+}
+
+/* ---------- render ---------- */
+function render(){
+  document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-current",b.dataset.tab===tab?"page":"false"));
+  $("#fab").hidden=tab!=="list";
+  renderBar();
+  const app=$("#app");
+  if(tab==="list") app.innerHTML=renderList();
+  else if(tab==="round") app.innerHTML=renderRound();
+  else app.innerHTML=renderSettings();
+  bindView();
+}
+function header(){
+  const all=list();const due=all.filter(d=>d.balance>0);
+  const tot=due.reduce((s,d)=>s+d.balance,0);
+  return `<header><p class="shop">${esc(state.settings.shop)} · دفتر الدين</p>
+  <div class="total"><b>${fmt(tot)}</b><span>${esc(state.settings.currency)} مستحقة على ${due.length} زبون</span></div></header>`;
+}
+function renderList(){
+  const q=query.trim();
+  const items=list().filter(d=>(filter==="all"||d.cycle===filter)&&(!q||d.name.includes(q)||cleanPhone(d.phone).includes(cleanPhone(q))));
+  const chips=[["all","الكل"],["weekly","أسبوعي"],["monthly","شهري"],["other","آخر"]]
+    .map(([k,v])=>`<button class="chip" data-filter="${k}" aria-pressed="${filter===k}">${v}</button>`).join("");
+  let body;
+  if(!Object.keys(state.debtors).length){
+    body=`<div class="list"><div class="empty">الدفتر فارغ. ارفع ملف Excel من الكاشير أو أضف أول زبون.<br>
+    <button class="btn" data-act="add">إضافة زبون</button> </div></div>`;
+  }else if(!items.length){
+    body=`<div class="list"><div class="empty">لا أحد يطابق البحث.</div></div>`;
+  }else{
+    body=`<div class="list">${items.map(d=>`<button class="row" data-open="${d.id}">
+      <span class="n">${esc(d.name)}</span>
+      <span class="amt ${d.balance>0?"due":"clear"}">${fmt(d.balance)}</span>
+      <span class="m">${CYCLES[d.cycle]||""} · <span class="ltr">${esc(d.phone)}</span>${d.lastSent?" · آخر تذكير "+new Date(d.lastSent).toLocaleDateString("en-GB"):""}</span>
+    </button>`).join("")}</div>`;
+  }
+  return header()+`<div class="search"><input id="q" type="search" placeholder="ابحث بالاسم أو الرقم" value="${esc(query)}"></div><div class="chips">${chips}</div><button class="btn ghost big" data-act="xlsx" style="margin-bottom:12px">رفع ملف Excel أو PDF من الكاشير</button><input type="file" id="xfile" accept=".xlsx,.xls,.csv,.pdf" hidden>`+body;
+}
+function roundQueue(){
+  return list().filter(d=>d.balance>0&&!remindedRecently(d)&&!roundSkipped.has(d.id)&&cleanPhone(d.phone));
+}
+function renderRound(){
+  const pool=list().filter(d=>d.balance>0&&cleanPhone(d.phone));
+  const q=roundQueue();
+  const done=pool.length-q.length;
+  const pct=pool.length?Math.round(done/pool.length*100):0;
+  let inner;
+  if(!pool.length){
+    inner=`<div class="card empty">لا يوجد زبائن عليهم دين حالياً.</div>`;
+  }else if(auto.running){
+    inner=`<div class="card"><h2 style="margin:0 0 6px">جارٍ الإرسال…</h2>
+      <p class="note">أُرسلت ${auto.sent} من ${auto.total}${auto.failed?` · فشل ${auto.failed}`:""}</p>
+      <p style="margin:6px 0 14px">الآن: <b>${esc(auto.current)}</b></p>
+      <p class="note">بين كل رسالة والتي بعدها نصف دقيقة حتى لا توقف الشركة الشريحة. اترك التطبيق مفتوحاً والشاشة تبقى مضاءة وحدها.</p>
+      <button class="btn red big" data-act="stopAll">إيقاف</button></div>`;
+  }else if(!q.length){
+    inner=`<div class="card"><h2 class="ok" style="margin:0 0 6px">انتهت الجولة</h2><p class="note">تم تذكير جميع الزبائن هذا الأسبوع. يعود كل زبون إلى القائمة بعد ٦ أيام من آخر رسالة له.</p>
+    ${roundSkipped.size?`<button class="btn quiet" data-act="unskip">إظهار من تخطيتهم (${roundSkipped.size})</button>`:""}</div>`;
+  }else{
+    const d=q[0];
+    inner=`<div class="card">
+      <p class="note" style="margin:0">التالي (${q.length} متبقٍ)</p>
+      <h2 style="margin:2px 0 0">${esc(d.name)}</h2>
+      <p class="note ltr" style="margin:0">${esc(d.phone)}</p>
+      <div class="preview">${esc(msgFor(d))}</div>
+      <button class="btn big" data-sms="${d.id}">أرسل لـ ${esc(d.name.split(" ")[0])}</button>
+      <div class="actions"><button class="btn quiet" data-copy="${d.id}">نسخ الرسالة</button><button class="btn quiet" data-skip="${d.id}">تخطي</button><button class="btn quiet" data-mark="${d.id}">أرسلتها، التالي</button></div>
+      ${NATIVE?"":`<p class="note">بعد الضغط تُنسخ الرسالة، أرسلها من تطبيق الرسائل ثم ارجع هنا.</p>`}
+    </div>`;
+  }
+  return header()+`<h3 style="margin:0 0 4px">جولة التذكير الأسبوعية</h3><p class="note" style="margin:0">لكل من عليه دين: ${done} من ${pool.length} تم تذكيرهم</p><div class="progress"><i style="width:${pct}%"></i></div>`+inner;
+}
+function simSection(){
+  if(!CAN_PICK_SIM) return "";
+  const sims=getSims();
+  if(sims==="no-permission"){
+    return `<div class="section"><h3>شريحة الإرسال</h3><p class="note">ليعرض التطبيق الشرائح الموجودة في جوالك يحتاج صلاحية "الهاتف".</p>
+    <button class="btn ghost" data-act="simPerm">السماح بقراءة الشرائح</button></div>`;
+  }
+  const cur=state.settings.simId===undefined||state.settings.simId===null?"":String(state.settings.simId);
+  const opts=[`<option value="" ${cur===""?"selected":""}>الشريحة الافتراضية في الجوال</option>`]
+    .concat(sims.map(s=>`<option value="${esc(s.id)}" ${String(s.id)===cur?"selected":""}>${esc(simLabel(s))}</option>`)).join("");
+  return `<div class="section"><h3>شريحة الإرسال</h3>
+    <label for="sSim">كل رسائل التطبيق تخرج من:</label><select class="field" id="sSim">${opts}</select>
+    ${sims.length?"":`<p class="note">لم يُعثر على شرائح مفعّلة في الجوال.</p>`}</div>`;
+}
+function renderSettings(){
+  const s=state.settings;
+  return `<header><p class="shop">الإعدادات</p></header>
+  <div class="section"><label for="sShop">اسم المحل</label><input class="field" id="sShop" value="${esc(s.shop)}">
+  <label for="sCur">العملة</label><input class="field" id="sCur" value="${esc(s.currency)}">
+  <label for="sTpl">نص الرسالة</label><textarea class="field" id="sTpl">${esc(s.template)}</textarea>
+  <p class="note">الكلمات التي تتبدّل تلقائياً: {الاسم} {المبلغ} {العملة} {المحل} {التاريخ}</p>
+  <button class="btn" data-act="saveSettings">حفظ الإعدادات</button></div>
+  ${simSection()}
+  <div class="section"><h3>استيراد من الكاشير</h3><p class="note">ارفع ملف Excel أو PDF، أو الصق القائمة كنص.</p>
+  <button class="btn ghost" data-act="import">استيراد قائمة</button></div>
+  <div class="section"><h3>نسخة احتياطية</h3><p class="note">ينسخ كل الزبائن كنص يمكنك حفظه في ملاحظات أو إرساله لنفسك على واتساب.</p>
+  <button class="btn ghost" data-act="export">نسخ القائمة</button></div>
+  <p class="note">${backend.kind==="local"&&NATIVE?"البيانات محفوظة داخل التطبيق على هذا الجوال، خذ نسخة احتياطية بين حين وآخر.":backend.kind==="cloud"?"البيانات محفوظة في حسابك، ولا يراها أحد غيرك.":"البيانات محفوظة على هذا الهاتف فقط، خذ نسخة احتياطية بين حين وآخر."}</p>`;
+}
+
+/* ---------- sheets ---------- */
+function openSheet(html,after){
+  const s=$("#sheet");s.innerHTML=html;$("#sheetBg").classList.add("open");s.classList.add("open");
+  s.querySelectorAll("[data-close]").forEach(b=>b.onclick=closeSheet);
+  if(after) after(s);
+}
+function closeSheet(){$("#sheetBg").classList.remove("open");$("#sheet").classList.remove("open")}
+$("#sheetBg").onclick=closeSheet;
+
+function formSheet(d){
+  const isNew=!d;d=d||{name:"",phone:"",cycle:"weekly",balance:0};
+  openSheet(`<h2>${isNew?"زبون جديد":"تعديل البيانات"}</h2>
+    <label for="fName">الاسم</label><input class="field" id="fName" value="${esc(d.name)}" autocomplete="off">
+    <label for="fPhone">رقم الجوال</label><input class="field ltr" id="fPhone" inputmode="tel" value="${esc(d.phone)}" placeholder="059xxxxxxx">
+    <label for="fCycle">نوع الدين</label><select class="field" id="fCycle">${Object.entries(CYCLES).map(([k,v])=>`<option value="${k}" ${d.cycle===k?"selected":""}>${v}</option>`).join("")}</select>
+    ${isNew?`<label for="fBal">الدين الحالي</label><input class="field ltr" id="fBal" inputmode="decimal" placeholder="0">`:""}
+    <div class="actions"><button class="btn" id="fSave">حفظ</button><button class="btn quiet" data-close>إلغاء</button></div>`,
+  s=>{
+    s.querySelector("#fName").focus();
+    s.querySelector("#fSave").onclick=async()=>{
+      const name=s.querySelector("#fName").value.trim(), phone=s.querySelector("#fPhone").value.trim();
+      if(!name){toast("اكتب اسم الزبون");return}
+      if(!cleanPhone(phone)){toast("اكتب رقم الجوال");return}
+      let obj;
+      if(isNew){
+        const bal=toNum(s.querySelector("#fBal").value);
+        obj={id:uid(),name,phone,cycle:s.querySelector("#fCycle").value,balance:bal,created:Date.now(),history:[]};
+        if(bal) pushHist(obj,{t:Date.now(),type:"plus",v:bal,note:"رصيد افتتاحي"});
+      }else{
+        obj=state.debtors[d.id];Object.assign(obj,{name,phone,cycle:s.querySelector("#fCycle").value});
+      }
+      state.debtors[obj.id]=obj;await backend.saveDebtor(obj);closeSheet();render();toast("تم الحفظ");
+      if(!isNew) detailSheet(obj.id);
+    };
+  });
+}
+
+function detailSheet(id){
+  const d=state.debtors[id];if(!d) return;
+  const hist=(d.history||[]).map(h=>{
+    const label=h.type==="plus"?"دين":h.type==="minus"?"دفعة":h.type==="sms"?"تذكير":"تصحيح";
+    const sign=h.type==="plus"?"+":h.type==="minus"?"−":"";
+    return `<div class="h"><div>${label}${h.note?" · "+esc(h.note):""}<div class="d">${dstr(h.t)}</div></div><div class="v ${h.type}">${h.type==="sms"?"✓":sign+fmt(h.v)}</div></div>`;
+  }).join("")||`<p class="note">لا حركات بعد.</p>`;
+  openSheet(`<h2>${esc(d.name)}</h2><p class="sub"><span class="ltr">${esc(d.phone)}</span> · ${CYCLES[d.cycle]}</p>
+    <div class="bal" style="color:${d.balance>0?"var(--debt)":"var(--paid)"}">${fmt(d.balance)} <small style="font-size:16px;color:var(--muted)">${esc(state.settings.currency)}</small></div>
+    <label for="amt">المبلغ</label><input class="field ltr" id="amt" inputmode="decimal" placeholder="0">
+    <input class="field" id="note" placeholder="ملاحظة (اختياري)" style="margin-top:8px">
+    <div class="actions">
+      <button class="btn red" data-op="plus">+ أضف دين</button>
+      <button class="btn green" data-op="minus">− سجّل دفعة</button>
+    </div>
+    <div class="actions">
+      <button class="btn quiet" data-op="set">تعديل الرصيد مباشرة</button>
+      <button class="btn ghost" id="oneSms">أرسل تذكير</button>
+    </div>
+    <div class="hist">${hist}</div>
+    <div class="actions"><button class="btn quiet" id="edit">تعديل الاسم والرقم</button><button class="btn quiet" id="del" style="color:var(--debt)">حذف</button></div>`,
+  s=>{
+    s.querySelectorAll("[data-op]").forEach(b=>b.onclick=async()=>{
+      const v=toNum(s.querySelector("#amt").value), note=s.querySelector("#note").value.trim(), op=b.dataset.op;
+      if(op!=="set"&&v<=0){toast("اكتب مبلغاً أكبر من صفر");return}
+      if(op==="plus") d.balance=(d.balance||0)+v;
+      else if(op==="minus") d.balance=(d.balance||0)-v;
+      else {if(s.querySelector("#amt").value.trim()===""){toast("اكتب الرصيد الجديد");return} d.balance=v;}
+      d.balance=Math.round(d.balance*100)/100;
+      pushHist(d,{t:Date.now(),type:op,v,note});
+      await backend.saveDebtor(d);render();detailSheet(id);
+      toast(op==="plus"?"أُضيف الدين":op==="minus"?"سُجّلت الدفعة":"عُدّل الرصيد");
+    });
+    s.querySelector("#oneSms").onclick=()=>sendFlow(id,()=>detailSheet(id));
+    s.querySelector("#edit").onclick=()=>formSheet(d);
+    s.querySelector("#del").onclick=async()=>{
+      if(!confirm("حذف "+d.name+" وكل حركاته؟")) return;
+      delete state.debtors[id];await backend.deleteDebtor(id);closeSheet();render();toast("حُذف");
+    };
+  });
+}
+
+const isPhone=s=>{const c=cleanPhone(s);return c.length>=7&&c.length<=15};
+function detectCols(rows){
+  // look for a header row with Arabic/English names; otherwise guess by content
+  for(let i=0;i<Math.min(rows.length,5);i++){
+    const r=rows[i].map(x=>String(x||"").trim());
+    const f=re=>r.findIndex(c=>re.test(c));
+    const n=f(/اسم|الزبون|العميل|name|customer/i), p=f(/رقم|جوال|هاتف|موبايل|تلفون|phone|mobile|tel/i), a=f(/دين|مبلغ|رصيد|المستحق|الباقي|balance|amount|debt|total/i), c=f(/نوع|الفترة|cycle|type/i);
+    if(n>-1&&(p>-1||a>-1)) return {start:i+1,n,p,a,c};
+  }
+  const sample=rows.slice(0,10), cols=Math.max(...sample.map(r=>r.length),0);
+  let p=-1,n=-1,a=-1;
+  for(let j=0;j<cols;j++){
+    const vals=sample.map(r=>r[j]).filter(v=>v!==undefined&&v!=="");
+    if(!vals.length) continue;
+    if(p<0&&vals.every(isPhone)) p=j;
+    else if(n<0&&vals.some(v=>/[\u0600-\u06FFa-z]/i.test(String(v)))) n=j;
+    else if(a<0&&vals.every(v=>!isNaN(toNum(v))&&!isPhone(v))) a=j;
+  }
+  return {start:0,n,p,a,c:-1};
+}
+function normName(s){
+  return String(s||"").normalize("NFKC").replace(/[\u064B-\u0652\u0640]/g,"").replace(/[أإآ]/g,"ا").replace(/ة/g,"ه").replace(/ى/g,"ي")
+    .replace(/\s+/g," ").trim();
+}
+async function upsertList(items){
+  const byPhone={},byName={};
+  Object.values(state.debtors).forEach(d=>{byPhone[cleanPhone(d.phone)]=d;byName[normName(d.name)]=d});
+  let added=0,updated=0;const missing=[];
+  for(const it of items){
+    const {name,phone,amount,cyc}=it, hasAmt=amount!==null&&amount!==undefined;
+    const cycle=/شهر|month/i.test(cyc||"")?"monthly":/آخر|اخر|other/i.test(cyc||"")?"other":"weekly";
+    const ex=phone?byPhone[cleanPhone(phone)]:byName[normName(name)];
+    if(!phone&&!ex){missing.push(name);continue}
+    if(ex){
+      if(hasAmt&&ex.balance!==amount){pushHist(ex,{t:Date.now(),type:"set",v:amount,note:"تحديث من ملف الكاشير"});ex.balance=amount}
+      if(cyc) ex.cycle=cycle;
+      await backend.saveDebtor(ex);updated++;
+    }else{
+      const bal=hasAmt?amount:0;
+      const d={id:uid(),name,phone,cycle,balance:bal,created:Date.now(),history:[]};
+      if(bal) pushHist(d,{t:Date.now(),type:"plus",v:bal,note:"رصيد افتتاحي"});
+      state.debtors[d.id]=d;byPhone[cleanPhone(phone)]=d;byName[normName(name)]=d;await backend.saveDebtor(d);added++;
+    }
+  }
+  return {added,updated,missing};
+}
+function importDone(r,bad){
+  closeSheet();tab="list";render();
+  const msg=`أُضيف ${r.added}، حُدّث ${r.updated}${bad?`، تُجوهل ${bad} سطر`:""}`;
+  if(!r.missing.length){toast(msg);return}
+  openSheet(`<h2>${msg}</h2>
+    <p class="sub">هذه الأسماء موجودة في الكشف بدون رقم جوال، ولم أجدها في التطبيق. أضفها مرة واحدة برقمها، أو تأكد أن الاسم مكتوب بنفس الطريقة، وفي الكشف القادم يتحدّث دينها تلقائياً.</p>
+    <div style="max-height:40vh;overflow:auto">${r.missing.map(n=>`<div class="h">${esc(n)}</div>`).join("")}</div>
+    <div class="actions"><button class="btn quiet" data-close>حسناً</button></div>`);
+}
+async function importRows(rows){
+  rows=rows.filter(r=>r&&r.some(x=>String(x??"").trim()!==""));
+  const m=detectCols(rows);
+  if(m.n<0||(m.p<0&&m.a<0)){toast("لم أجد عمود الاسم والرقم أو الدين في الملف");return}
+  const items=[];let bad=0;
+  for(const r of rows.slice(m.start)){
+    const name=String(r[m.n]??"").trim();let phone=m.p>-1?String(r[m.p]??"").trim():"";
+    if(/^5\d{8}$/.test(cleanPhone(phone))) phone="0"+cleanPhone(phone); // Excel drops the leading zero
+    if(!name||(phone&&!isPhone(phone))||(!phone&&m.a<0)){bad++;continue}
+    if(!phone&&String(r[m.a]??"").trim()===""){bad++;continue}
+    items.push({name,phone,amount:m.a>-1?toNum(r[m.a]):null,cyc:m.c>-1?String(r[m.c]??""):""});
+  }
+  importDone(await upsertList(items),bad);
+}
+
+/* ---------- PDF ---------- */
+const PDFJS_BASE="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement("script");s.src=src;s.onload=res;s.onerror=()=>rej(new Error("load"));document.head.appendChild(s)})}
+async function ensurePdf(){
+  if(!window.pdfjsLib) await loadScript(PDFJS_BASE+"pdf.min.js");
+  if(!window.pdfjsWorker) await loadScript(PDFJS_BASE+"pdf.worker.min.js"); // runs the reader without a separate worker
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc=PDFJS_BASE+"pdf.worker.min.js";
+}
+async function pdfLines(buf){
+  const pdf=await window.pdfjsLib.getDocument({data:new Uint8Array(buf),isEvalSupported:false}).promise;
+  const lines=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);const tc=await page.getTextContent();
+    const rows=[];
+    for(const it of tc.items){
+      const t=String(it.str||"").trim();if(!t) continue;
+      const x=it.transform[4],y=it.transform[5];
+      let r=rows.find(r=>Math.abs(r.y-y)<4);
+      if(!r){r={y,items:[]};rows.push(r)}
+      r.items.push({x,t});
+    }
+    rows.sort((a,b)=>b.y-a.y);
+    rows.forEach(r=>{r.items.sort((a,b)=>b.x-a.x);lines.push(r.items.map(i=>i.t).join("  "))});
+  }
+  return lines;
+}
+function normPhone(raw){
+  let d=String(raw).replace(/\D/g,"");
+  d=d.replace(/^00/,"").replace(/^(970|972)/,"");
+  if(/^5\d{8}$/.test(d)) d="0"+d;
+  return /^05\d{8}$/.test(d)?d:"";
+}
+function parsePdfLine(line){
+  let text=line.normalize("NFKC").replace(/[٠-٩]/g,d=>"٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[٫]/g,".");
+  const pm=text.match(/(?:\+|00)?(?:970|972)?[\s-]?0?5\d[\s-]?\d{3}[\s-]?\d{4}/);
+  const phone=pm?normPhone(pm[0]):"";
+  let rest=(pm?text.replace(pm[0]," "):text).replace(/\d{1,4}[\/.\-]\d{1,2}[\/.\-]\d{1,4}/g," ").replace(/\d{1,2}:\d{2}/g," ");
+  const nums=(rest.match(/-?\d[\d,]*(?:\.\d+)?/g)||[]).map(n=>Number(n.replace(/,/g,""))).filter(n=>!isNaN(n));
+  const amount=nums.length?nums[nums.length-1]:null;
+  const name=(rest.match(/[؀-ۿa-zA-Z][؀-ۿa-zA-Z.'\s]*/g)||[]).join(" ")
+    .replace(/(شيكل|شيقل|ش\.ج|ILS|NIS|دين|الدين|رصيد|المبلغ|مبلغ|أسبوعي|اسبوعي|شهري)/g," ").replace(/\s+/g," ").trim();
+  if(!name) return null;
+  if(!phone&&amount===null) return null;
+  return {name,phone,amount,cyc:/شهر/.test(text)?"شهري":""};
+}
+async function importPdf(file){
+  toast("جارٍ قراءة ملف PDF…");
+  try{await ensurePdf()}catch(e){toast("تعذّر تحميل قارئ PDF، تحقق من الإنترنت");return}
+  let lines;
+  try{lines=await pdfLines(await file.arrayBuffer())}catch(e){toast("ملف PDF غير مقروء");return}
+  const seen={},items=[];
+  for(const l of lines){const it=parsePdfLine(l);if(!it) continue;const k=it.phone||normName(it.name);if(!seen[k]){seen[k]=1;items.push(it)}}
+  if(!items.length){
+    toast(lines.length?"لم أجد أسماء مع ديون في الملف":"الملف صورة ممسوحة وليس فيه نص، صدّره من الكاشير كـ PDF نصي أو Excel");
+    return;
+  }
+  importDone(await upsertList(items),0);
+}
+async function importFile(file){
+  if(!file) return;
+  if(/\.pdf$/i.test(file.name||"")||file.type==="application/pdf") return importPdf(file);
+  if(!window.XLSX){toast("تعذّر تحميل قارئ Excel، تحقق من الإنترنت");return}
+  toast("جارٍ قراءة الملف…");
+  try{
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:"array"});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:""});
+    await importRows(rows);
+  }catch(e){toast("الملف غير مقروء، احفظه بصيغة xlsx أو csv")}
+}
+function pickFile(){const f=$("#xfile")||Object.assign(document.createElement("input"),{type:"file",accept:".xlsx,.xls,.csv,.pdf"});f.value="";f.onchange=()=>importFile(f.files[0]);f.click()}
+function importSheet(){
+  openSheet(`<h2>إضافة قائمة</h2>
+  <p class="sub">ارفع ملف Excel المصدَّر من الكاشير مباشرة. يكفي أن يحتوي على عمود للاسم وعمود للرقم وعمود للدين. إذا كان الزبون موجوداً يُحدَّث دينه تلقائياً.</p>
+  <button class="btn big" id="impFile">اختر ملف Excel أو PDF</button>
+  <label for="imp">أو الصق القائمة هنا</label>
+  <textarea class="field" id="imp" placeholder="أبو محمد, 0599123456, 150&#10;سامي حسن, 0567111222, 80"></textarea>
+  <div class="actions"><button class="btn ghost" id="impGo">استيراد النص</button><button class="btn quiet" data-close>إلغاء</button></div>`,
+  s=>{
+    s.querySelector("#impFile").onclick=pickFile;
+    s.querySelector("#impGo").onclick=()=>importRows(s.querySelector("#imp").value.split(/\r?\n/).map(l=>l.split(/\t|,|،|;/).map(x=>x.trim())));
+  });
+}
+
+async function copyText(t){try{await navigator.clipboard.writeText(t);return true}catch(e){return false}}
+async function sendFlow(id,after){
+  const d=state.debtors[id];if(!d) return;
+  const msg=msgFor(d), link=smsLink(d);
+  if(NATIVE){
+    openSheet(`<h2>إرسال إلى ${esc(d.name)}</h2>
+      <p class="sub ltr">${esc(cleanPhone(d.phone))}</p>
+      <div class="preview">${esc(msg)}</div>
+      <p class="note">ستُرسل من: <b>${esc(chosenSimLabel())}</b></p>
+      <div class="actions"><button class="btn green" id="goSend">أرسل الآن</button><button class="btn quiet" data-close>إلغاء</button></div>`,
+    s=>{
+      s.querySelector("#goSend").onclick=async e=>{
+        e.target.disabled=true;
+        const r=nativeSend(cleanPhone(d.phone),msg);
+        if(r==="ok"){await markSent(id);closeSheet();render();toast("أُرسلت الرسالة إلى "+d.name);if(after) after()}
+        else {e.target.disabled=false;if(r==="no-permission") NATIVE.askPermission();toast(sendErrorText(r))}
+      };
+    });
+    return;
+  }
+  await copyText(msg);
+  let w=null;try{w=window.open(link,"_blank")}catch(e){}
+  openSheet(`<h2>${esc(d.name)}</h2>
+    <p class="sub">الرسالة منسوخة. انسخ الرقم، افتح تطبيق الرسائل، الصق الرقم والرسالة وأرسل، ثم ارجع واضغط "تم الإرسال".</p>
+    <div class="preview">${esc(msg)}</div>
+    <div class="actions"><button class="btn ghost" id="cpPhone">نسخ الرقم <span class="ltr">${esc(cleanPhone(d.phone))}</span></button><button class="btn ghost" id="cpMsg">نسخ الرسالة</button></div>
+    <div class="actions"><button class="btn green" id="done">تم الإرسال</button><button class="btn quiet" data-close>لم أرسل</button></div>`,
+  s=>{
+    s.querySelector("#cpPhone").onclick=async()=>toast(await copyText(cleanPhone(d.phone))?"نُسخ الرقم":"تعذّر النسخ");
+    s.querySelector("#cpMsg").onclick=async()=>toast(await copyText(msg)?"نُسخت الرسالة":"تعذّر النسخ");
+    s.querySelector("#done").onclick=async()=>{await markSent(id);closeSheet();render();if(after) after()};
+  });
+}
+function renderBar(){
+  const bar=$("#sendBar");if(!bar) return;
+  if(auto.running){
+    const left=Math.max(0,Math.ceil((auto.nextAt-Date.now())/1000));
+    bar.innerHTML=`<div class="info"><b>جارٍ الإرسال ${auto.sent+auto.failed} من ${auto.total}</b>
+      <small>${auto.sent+auto.failed<auto.total?(left?`الرسالة التالية بعد ${left} ثانية`:"يُرسل الآن…"):"ينتهي الآن…"}${auto.failed?` · فشل ${auto.failed}`:""}</small></div>
+      <button class="btn red" style="flex:0 0 auto" data-bar="stop">إيقاف</button>`;
+  }else{
+    const n=roundQueue().length;
+    bar.innerHTML=(n?`<button class="btn green" data-bar="all">الإرسال للجميع (${n})</button>`
+      :`<button class="btn quiet" disabled>تم تذكير الجميع هذا الأسبوع</button>`)
+      +`<button class="sleepbtn" data-bar="sleep" aria-label="وضع السكون">🌙 سكون</button>`;
+  }
+  bar.querySelectorAll("[data-bar]").forEach(b=>b.onclick=()=>{
+    const k=b.dataset.bar;
+    if(k==="all") runAll();
+    else if(k==="stop") stopAll();
+    else if(confirm("وضع التطبيق في السكون؟ لن تخرج أي رسالة حتى ترفعه.")) setSleep(true);
+  });
+}
+let barTimer=null;
+function tickBar(){
+  clearInterval(barTimer);
+  if(auto.running) barTimer=setInterval(()=>{if(!auto.running){clearInterval(barTimer);renderBar();return}renderBar()},1000);
+  renderBar();
+}
+function stopAll(){
+  if(!auto.running) return;
+  if(NATIVE_BATCH) NATIVE.stopBatch();
+  auto.running=false;tickBar();render();toast("تم إيقاف الإرسال");
+}
+async function runAll(){
+  if(auto.running) return;
+  if(isSleeping()){toast(sendErrorText("sleep"));return}
+  if(!NATIVE){tab="round";render();window.scrollTo(0,0);return}
+  if(NATIVE.hasPermission()!=="yes"){NATIVE.askPermission();toast("اسمح للتطبيق بإرسال الرسائل ثم اضغط مرة أخرى");return}
+  const q=roundQueue();
+  if(!q.length){toast("لا يوجد من يحتاج تذكيراً الآن");return}
+  const mins=Math.max(1,Math.ceil((q.length-1)*GAP_MS/60000));
+  if(!confirm(`سيتم إرسال ${q.length} رسالة من: ${chosenSimLabel()}\nنصف دقيقة بين كل رسالة، تنتهي خلال ${mins} دقيقة تقريباً.\nاترك التطبيق مفتوحاً. متابعة؟`)) return;
+  auto={running:true,sent:0,failed:0,total:q.length,current:q[0].name,nextAt:Date.now(),ids:q.map(d=>d.id)};
+  if(NATIVE_BATCH){
+    const sim=state.settings.simId;
+    NATIVE.startBatch(JSON.stringify(q.map(d=>({id:d.id,phone:cleanPhone(d.phone),msg:msgFor(d)}))),GAP_MS,sim===undefined||sim===null?"":String(sim));
+    tickBar();render();return;
+  }
+  tickBar();render();
+  for(let i=0;i<q.length;i++){
+    if(!auto.running) break;
+    const d=q[i];auto.current=d.name;render();
+    await onBatchItem(d.id,nativeSend(cleanPhone(d.phone),msgFor(d)),i,q.length,i<q.length-1?Date.now()+GAP_MS:0);
+    if(i<q.length-1&&auto.running) await sleep(GAP_MS);
+  }
+  onBatchDone();
+}
+async function onBatchItem(id,r,i,total,nextAt){
+  const d=state.debtors[id];
+  if(r==="ok"){auto.sent++;if(d) await markSent(id)}
+  else{auto.failed++;roundSkipped.add(id);if(r!=="ok"&&(r==="no-permission"||r==="no-sim")) toast(sendErrorText(r))}
+  auto.total=total;auto.nextAt=nextAt||0;
+  const nx=nextAt&&auto.ids?state.debtors[auto.ids[i+1]]:null;
+  auto.current=nx?nx.name:"";
+  if(tab==="round") render(); else renderBar();
+}
+function onBatchDone(){
+  if(!auto.total) return;
+  const msg=`انتهى: أُرسلت ${auto.sent}${auto.failed?`، فشلت ${auto.failed}`:""}`;
+  auto.running=false;tickBar();render();toast(msg);
+}
+window.onBatchItem=(id,r,i,total,nextAt)=>{onBatchItem(id,r,i,total,nextAt)};
+window.onBatchDone=()=>onBatchDone();
+async function restoreBatch(){
+  if(!NATIVE_BATCH||!NATIVE.batchInfo) return;
+  let info;try{info=JSON.parse(NATIVE.batchInfo())}catch(e){return}
+  if(!info||!info.total) return;
+  let sent=0,failed=0;
+  for(const x of info.results||[]){
+    if(x.r==="ok"){sent++;const d=state.debtors[x.id];if(d&&(!d.lastSent||d.lastSent<info.startedAt)) await markSent(x.id)}
+    else failed++;
+  }
+  if(info.running) auto={running:true,sent,failed,total:info.total,current:"",nextAt:info.nextAt||0};
+}
+async function markSent(id){
+  const d=state.debtors[id];if(!d) return;
+  d.lastSent=Date.now();pushHist(d,{t:Date.now(),type:"sms",v:0,note:"بمبلغ "+fmt(d.balance)});
+  await backend.saveDebtor(d);
+}
+
+/* ---------- events ---------- */
+function bindView(){
+  const app=$("#app");
+  const q=app.querySelector("#q");
+  if(q) q.oninput=e=>{query=e.target.value;const pos=e.target.selectionStart;render();const n=$("#q");n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}};
+  const simSel=app.querySelector("#sSim");
+  if(simSel) simSel.onchange=async()=>{state.settings={...state.settings,simId:simSel.value===""?null:simSel.value};await backend.saveSettings();toast("ستُرسل الرسائل من: "+chosenSimLabel())};
+  app.querySelectorAll("[data-filter]").forEach(b=>b.onclick=()=>{filter=b.dataset.filter;render()});
+  app.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>detailSheet(b.dataset.open));
+  app.querySelectorAll("[data-cycle]").forEach(b=>b.onclick=()=>{roundCycle=b.dataset.cycle;roundSkipped.clear();render()});
+  app.querySelectorAll("[data-sms]").forEach(b=>b.onclick=()=>sendFlow(b.dataset.sms));
+  app.querySelectorAll("[data-mark]").forEach(b=>b.onclick=async()=>{await markSent(b.dataset.mark);render()});
+  app.querySelectorAll("[data-copy]").forEach(b=>b.onclick=async()=>{const d=state.debtors[b.dataset.copy];try{await navigator.clipboard.writeText(msgFor(d));toast("نُسخت الرسالة")}catch(e){toast("تعذّر النسخ")}});
+  app.querySelectorAll("[data-skip]").forEach(b=>b.onclick=()=>{roundSkipped.add(b.dataset.skip);render()});
+  app.querySelectorAll("[data-act]").forEach(b=>b.onclick=async()=>{
+    const a=b.dataset.act;
+    if(a==="add") formSheet();
+    else if(a==="import") importSheet();
+    else if(a==="xlsx") pickFile();
+    else if(a==="sendAll") runAll();
+    else if(a==="simPerm") NATIVE.askPhonePermission();
+    else if(a==="stopAll") stopAll();
+    else if(a==="unskip"){roundSkipped.clear();render()}
+    else if(a==="saveSettings"){
+      state.settings={...state.settings,shop:$("#sShop").value.trim()||DEFAULT_SETTINGS.shop,currency:$("#sCur").value.trim(),template:$("#sTpl").value.trim()||DEFAULT_SETTINGS.template};
+      await backend.saveSettings();toast("حُفظت الإعدادات");render();
+    }else if(a==="export"){
+      const txt=list().map(d=>[d.name,d.phone,d.balance,CYCLES[d.cycle]].join(", ")).join("\n");
+      try{await navigator.clipboard.writeText(txt);toast("نُسخت القائمة")}catch(e){openSheet(`<h2>انسخ النص</h2><textarea class="field" style="min-height:240px">${esc(txt)}</textarea><div class="actions"><button class="btn quiet" data-close>إغلاق</button></div>`)}
+    }
+  });
+}
+document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{tab=b.dataset.tab;closeSheet();render();window.scrollTo(0,0)});
+$("#fab").onclick=()=>formSheet();
+window.onSimPermission=()=>{if(tab==="settings") render()};
+$("#wakeBtn").onclick=()=>{if(confirm("رفع وضع السكون وإعادة تشغيل التطبيق؟")) setSleep(false)};
+
+initStorage().then(()=>{
+  if(NATIVE&&NATIVE.isSleep&&NATIVE.isSleep()==="yes") state.settings={...state.settings,sleep:true};
+  else if(NATIVE&&NATIVE.setSleep&&isSleeping()) NATIVE.setSleep(true);
+  applySleep();
+}).then(restoreBatch).then(()=>{render();tickBar()});
+})();
+</script>
+</body>
+</html>
