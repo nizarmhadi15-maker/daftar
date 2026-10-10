@@ -275,27 +275,41 @@ function header(){
   return `<header><p class="shop">${esc(state.settings.shop)} · دفتر الدين</p>
   <div class="total"><b>${fmt(tot)}</b><span>${esc(state.settings.currency)} مستحقة على ${due.length} زبون</span></div></header>`;
 }
-function renderList(){
+function matchesQuery(d,q){
+  if(!q) return true;
+  const digits=q.replace(/[٠-٩]/g,c=>"٠١٢٣٤٥٦٧٨٩".indexOf(c)).replace(/\D/g,"");
+  if(digits.length>=3&&cleanPhone(d.phone).includes(digits)) return true;
+  const words=normName(q).split(" ").filter(Boolean);
+  if(!words.length) return false;
+  const n=normName(d.name);
+  return words.every(w=>n.includes(w));
+}
+function listBodyHTML(){
   const q=query.trim();
-  const items=list().filter(d=>(filter==="all"||(filter==="nophone"?!cleanPhone(d.phone):d.cycle===filter))&&(!q||d.name.includes(q)||cleanPhone(d.phone).includes(cleanPhone(q))));
-  const noPh=list().filter(d=>!cleanPhone(d.phone)).length;
-  if(filter==="nophone"&&!noPh) filter="all";
-  const chips=[["all","الكل"],["weekly","أسبوعي"],["monthly","شهري"],["other","آخر"]].concat(noPh?[["nophone",`بدون رقم (${noPh})`]]:[])
-    .map(([k,v])=>`<button class="chip" data-filter="${k}" aria-pressed="${filter===k}">${v}</button>`).join("");
-  let body;
+  const items=list().filter(d=>(filter==="all"||(filter==="nophone"?!cleanPhone(d.phone):d.cycle===filter))&&matchesQuery(d,q));
   if(!Object.keys(state.debtors).length){
-    body=`<div class="list"><div class="empty">الدفتر فارغ. ارفع ملف Excel من الكاشير أو أضف أول زبون.<br>
+    return `<div class="list"><div class="empty">الدفتر فارغ. ارفع ملف Excel من الكاشير أو أضف أول زبون.<br>
     <button class="btn" data-act="add">إضافة زبون</button> </div></div>`;
-  }else if(!items.length){
-    body=`<div class="list"><div class="empty">لا أحد يطابق البحث.</div></div>`;
-  }else{
-    body=`<div class="list">${items.map(d=>`<button class="row" data-open="${d.id}">
+  }
+  if(!items.length) return `<div class="list"><div class="empty">لا أحد يطابق البحث.</div></div>`;
+  return (q?`<p class="note" style="margin:0 4px 6px">${items.length} نتيجة</p>`:"")+`<div class="list">${items.map(d=>`<button class="row" data-open="${d.id}">
       <span class="n">${esc(d.name)}</span>
       <span class="amt ${d.balance>0?"due":"clear"}">${fmt(d.balance)}</span>
       <span class="m">${CYCLES[d.cycle]||""} · ${cleanPhone(d.phone)?`<span class="ltr">${esc(d.phone)}</span>`:`<span style="color:var(--debt)">بدون رقم، اضغط لإضافته</span>`}${d.lastSent?" · آخر تذكير "+new Date(d.lastSent).toLocaleDateString("en-GB"):""}</span>
     </button>`).join("")}</div>`;
-  }
-  return header()+`<div class="search"><input id="q" type="search" placeholder="ابحث بالاسم أو الرقم" value="${esc(query)}"></div><div class="chips">${chips}</div><button class="btn ghost big" data-act="xlsx" style="margin-bottom:12px">رفع ملف Excel أو PDF من الكاشير</button><input type="file" id="xfile" accept=".xlsx,.xls,.csv,.pdf" hidden>`+body;
+}
+function refreshListBody(){
+  const box=$("#listBody");if(!box) return;
+  box.innerHTML=listBodyHTML();
+  box.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>detailSheet(b.dataset.open));
+  box.querySelectorAll("[data-act=add]").forEach(b=>b.onclick=()=>formSheet());
+}
+function renderList(){
+  const noPh=list().filter(d=>!cleanPhone(d.phone)).length;
+  if(filter==="nophone"&&!noPh) filter="all";
+  const chips=[["all","الكل"],["weekly","أسبوعي"],["monthly","شهري"],["other","آخر"]].concat(noPh?[["nophone",`بدون رقم (${noPh})`]]:[])
+    .map(([k,v])=>`<button class="chip" data-filter="${k}" aria-pressed="${filter===k}">${v}</button>`).join("");
+  return header()+`<div class="search"><input id="q" type="search" placeholder="ابحث بالاسم أو الرقم" value="${esc(query)}" autocomplete="off"></div><div class="chips">${chips}</div><button class="btn ghost big" data-act="xlsx" style="margin-bottom:12px">رفع ملف Excel أو PDF من الكاشير</button><input type="file" id="xfile" accept=".xlsx,.xls,.csv,.pdf" hidden><div id="listBody">${listBodyHTML()}</div>`;
 }
 function roundQueue(){
   return list().filter(d=>d.balance>0&&!remindedRecently(d)&&!roundSkipped.has(d.id)&&cleanPhone(d.phone));
@@ -460,6 +474,7 @@ function detectCols(rows){
   }
   return {start:0,n,p,a,c:-1};
 }
+function isTotalRow(s){return /^(ال)?(اجمالي|إجمالي|أجمالي|مجموع|المجموع|الاجمالي|الإجمالي|المجموع الكلي|total)/i.test(String(s||"").trim())}
 function cleanName(s){return String(s||"").replace(/(^|\s)[A-Za-z](?=\s|$)/g," ").replace(/\s+/g," ").trim()}
 function normName(s){
   return cleanName(s).normalize("NFKC").replace(/[\u064B-\u0652\u0640]/g,"").replace(/[أإآ]/g,"ا").replace(/ة/g,"ه").replace(/ى/g,"ي")
@@ -471,6 +486,7 @@ async function upsertList(items){
   let added=0,updated=0;const missing=[];
   for(const it of items){
     const {phone,amount,cyc}=it, name=cleanName(it.name)||it.name, hasAmt=amount!==null&&amount!==undefined;
+    if(isTotalRow(name)) continue;
     const cycle=/شهر|month/i.test(cyc||"")?"monthly":/آخر|اخر|other/i.test(cyc||"")?"other":"weekly";
     let ex=phone?byPhone[cleanPhone(phone)]:null;
     if(!ex){const byN=byName[normName(name)];if(byN&&(!phone||!cleanPhone(byN.phone))) ex=byN}
@@ -557,7 +573,7 @@ function parsePdfLine(line){
   const name=(rest.match(/[؀-ۿa-zA-Z][؀-ۿa-zA-Z.'\s]*/g)||[]).join(" ")
     .replace(/(شيكل|شيقل|ش\.ج|ILS|NIS|دين|الدين|رصيد|المبلغ|مبلغ|أسبوعي|اسبوعي|شهري)/g," ").replace(/\s+/g," ").trim();
   const nm=cleanName(name);
-  if(!nm||nm.length<2) return null;
+  if(!nm||nm.length<2||isTotalRow(nm)) return null;
   if(!phone&&amount===null) return null;
   return {name:nm,phone,amount,cyc:/شهر/.test(text)?"شهري":""};
 }
@@ -726,7 +742,7 @@ async function markSent(id){
 function bindView(){
   const app=$("#app");
   const q=app.querySelector("#q");
-  if(q) q.oninput=e=>{query=e.target.value;const pos=e.target.selectionStart;render();const n=$("#q");n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}};
+  if(q) q.oninput=e=>{query=e.target.value;clearTimeout(q._t);q._t=setTimeout(refreshListBody,180)};
   const simSel=app.querySelector("#sSim");
   if(simSel) simSel.onchange=async()=>{state.settings={...state.settings,simId:simSel.value===""?null:simSel.value};await backend.saveSettings();toast("ستُرسل الرسائل من: "+chosenSimLabel())};
   app.querySelectorAll("[data-filter]").forEach(b=>b.onclick=()=>{filter=b.dataset.filter;render()});
@@ -759,7 +775,8 @@ $("#fab").onclick=()=>formSheet();
 window.onSimPermission=()=>{if(tab==="settings") render()};
 $("#wakeBtn").onclick=()=>{if(confirm("رفع وضع السكون وإعادة تشغيل التطبيق؟")) setSleep(false)};
 
-initStorage().then(()=>{
+initStorage().then(async()=>{
+  for(const d of Object.values(state.debtors)) if(isTotalRow(d.name)&&!cleanPhone(d.phone)){delete state.debtors[d.id];await backend.deleteDebtor(d.id)}
   if(NATIVE&&NATIVE.isSleep&&NATIVE.isSleep()==="yes") state.settings={...state.settings,sleep:true};
   else if(NATIVE&&NATIVE.setSleep&&isSleeping()) NATIVE.setSleep(true);
   applySleep();
