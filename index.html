@@ -277,8 +277,10 @@ function header(){
 }
 function renderList(){
   const q=query.trim();
-  const items=list().filter(d=>(filter==="all"||d.cycle===filter)&&(!q||d.name.includes(q)||cleanPhone(d.phone).includes(cleanPhone(q))));
-  const chips=[["all","الكل"],["weekly","أسبوعي"],["monthly","شهري"],["other","آخر"]]
+  const items=list().filter(d=>(filter==="all"||(filter==="nophone"?!cleanPhone(d.phone):d.cycle===filter))&&(!q||d.name.includes(q)||cleanPhone(d.phone).includes(cleanPhone(q))));
+  const noPh=list().filter(d=>!cleanPhone(d.phone)).length;
+  if(filter==="nophone"&&!noPh) filter="all";
+  const chips=[["all","الكل"],["weekly","أسبوعي"],["monthly","شهري"],["other","آخر"]].concat(noPh?[["nophone",`بدون رقم (${noPh})`]]:[])
     .map(([k,v])=>`<button class="chip" data-filter="${k}" aria-pressed="${filter===k}">${v}</button>`).join("");
   let body;
   if(!Object.keys(state.debtors).length){
@@ -290,7 +292,7 @@ function renderList(){
     body=`<div class="list">${items.map(d=>`<button class="row" data-open="${d.id}">
       <span class="n">${esc(d.name)}</span>
       <span class="amt ${d.balance>0?"due":"clear"}">${fmt(d.balance)}</span>
-      <span class="m">${CYCLES[d.cycle]||""} · <span class="ltr">${esc(d.phone)}</span>${d.lastSent?" · آخر تذكير "+new Date(d.lastSent).toLocaleDateString("en-GB"):""}</span>
+      <span class="m">${CYCLES[d.cycle]||""} · ${cleanPhone(d.phone)?`<span class="ltr">${esc(d.phone)}</span>`:`<span style="color:var(--debt)">بدون رقم، اضغط لإضافته</span>`}${d.lastSent?" · آخر تذكير "+new Date(d.lastSent).toLocaleDateString("en-GB"):""}</span>
     </button>`).join("")}</div>`;
   }
   return header()+`<div class="search"><input id="q" type="search" placeholder="ابحث بالاسم أو الرقم" value="${esc(query)}"></div><div class="chips">${chips}</div><button class="btn ghost big" data-act="xlsx" style="margin-bottom:12px">رفع ملف Excel أو PDF من الكاشير</button><input type="file" id="xfile" accept=".xlsx,.xls,.csv,.pdf" hidden>`+body;
@@ -381,7 +383,7 @@ function formSheet(d){
     s.querySelector("#fSave").onclick=async()=>{
       const name=s.querySelector("#fName").value.trim(), phone=s.querySelector("#fPhone").value.trim();
       if(!name){toast("اكتب اسم الزبون");return}
-      if(!cleanPhone(phone)){toast("اكتب رقم الجوال");return}
+      if(phone&&!isPhone(phone)){toast("رقم الجوال غير صحيح");return}
       let obj;
       if(isNew){
         const bal=toNum(s.querySelector("#fBal").value);
@@ -413,7 +415,7 @@ function detailSheet(id){
     </div>
     <div class="actions">
       <button class="btn quiet" data-op="set">تعديل الرصيد مباشرة</button>
-      <button class="btn ghost" id="oneSms">أرسل تذكير</button>
+      <button class="btn ghost" id="oneSms">${cleanPhone(d.phone)?"أرسل تذكير":"أضف رقم الجوال"}</button>
     </div>
     <div class="hist">${hist}</div>
     <div class="actions"><button class="btn quiet" id="edit">تعديل الاسم والرقم</button><button class="btn quiet" id="del" style="color:var(--debt)">حذف</button></div>`,
@@ -429,7 +431,7 @@ function detailSheet(id){
       await backend.saveDebtor(d);render();detailSheet(id);
       toast(op==="plus"?"أُضيف الدين":op==="minus"?"سُجّلت الدفعة":"عُدّل الرصيد");
     });
-    s.querySelector("#oneSms").onclick=()=>sendFlow(id,()=>detailSheet(id));
+    s.querySelector("#oneSms").onclick=()=>cleanPhone(d.phone)?sendFlow(id,()=>detailSheet(id)):formSheet(d);
     s.querySelector("#edit").onclick=()=>formSheet(d);
     s.querySelector("#del").onclick=async()=>{
       if(!confirm("حذف "+d.name+" وكل حركاته؟")) return;
@@ -458,8 +460,9 @@ function detectCols(rows){
   }
   return {start:0,n,p,a,c:-1};
 }
+function cleanName(s){return String(s||"").replace(/(^|\s)[A-Za-z](?=\s|$)/g," ").replace(/\s+/g," ").trim()}
 function normName(s){
-  return String(s||"").normalize("NFKC").replace(/[\u064B-\u0652\u0640]/g,"").replace(/[أإآ]/g,"ا").replace(/ة/g,"ه").replace(/ى/g,"ي")
+  return cleanName(s).normalize("NFKC").replace(/[\u064B-\u0652\u0640]/g,"").replace(/[أإآ]/g,"ا").replace(/ة/g,"ه").replace(/ى/g,"ي")
     .replace(/\s+/g," ").trim();
 }
 async function upsertList(items){
@@ -467,19 +470,22 @@ async function upsertList(items){
   Object.values(state.debtors).forEach(d=>{byPhone[cleanPhone(d.phone)]=d;byName[normName(d.name)]=d});
   let added=0,updated=0;const missing=[];
   for(const it of items){
-    const {name,phone,amount,cyc}=it, hasAmt=amount!==null&&amount!==undefined;
+    const {phone,amount,cyc}=it, name=cleanName(it.name)||it.name, hasAmt=amount!==null&&amount!==undefined;
     const cycle=/شهر|month/i.test(cyc||"")?"monthly":/آخر|اخر|other/i.test(cyc||"")?"other":"weekly";
-    const ex=phone?byPhone[cleanPhone(phone)]:byName[normName(name)];
-    if(!phone&&!ex){missing.push(name);continue}
+    let ex=phone?byPhone[cleanPhone(phone)]:null;
+    if(!ex){const byN=byName[normName(name)];if(byN&&(!phone||!cleanPhone(byN.phone))) ex=byN}
     if(ex){
+      if(phone&&!cleanPhone(ex.phone)){ex.phone=phone;byPhone[cleanPhone(phone)]=ex}
+      if(cleanName(ex.name)&&cleanName(ex.name)!==ex.name) ex.name=cleanName(ex.name);
       if(hasAmt&&ex.balance!==amount){pushHist(ex,{t:Date.now(),type:"set",v:amount,note:"تحديث من ملف الكاشير"});ex.balance=amount}
       if(cyc) ex.cycle=cycle;
       await backend.saveDebtor(ex);updated++;
     }else{
       const bal=hasAmt?amount:0;
-      const d={id:uid(),name,phone,cycle,balance:bal,created:Date.now(),history:[]};
+      const d={id:uid(),name,phone:phone||"",cycle,balance:bal,created:Date.now(),history:[]};
       if(bal) pushHist(d,{t:Date.now(),type:"plus",v:bal,note:"رصيد افتتاحي"});
-      state.debtors[d.id]=d;byPhone[cleanPhone(phone)]=d;byName[normName(name)]=d;await backend.saveDebtor(d);added++;
+      state.debtors[d.id]=d;if(phone) byPhone[cleanPhone(phone)]=d;byName[normName(name)]=d;await backend.saveDebtor(d);added++;
+      if(!phone) missing.push(name);
     }
   }
   return {added,updated,missing};
@@ -488,8 +494,9 @@ function importDone(r,bad){
   closeSheet();tab="list";render();
   const msg=`أُضيف ${r.added}، حُدّث ${r.updated}${bad?`، تُجوهل ${bad} سطر`:""}`;
   if(!r.missing.length){toast(msg);return}
+  filter="nophone";render();
   openSheet(`<h2>${msg}</h2>
-    <p class="sub">هذه الأسماء موجودة في الكشف بدون رقم جوال، ولم أجدها في التطبيق. أضفها مرة واحدة برقمها، أو تأكد أن الاسم مكتوب بنفس الطريقة، وفي الكشف القادم يتحدّث دينها تلقائياً.</p>
+    <p class="sub">${r.missing.length} زبون أُضيفوا بدون رقم جوال، لأن الكشف لا يحتوي أرقامهم. دينهم محفوظ ويتحدّث مع كل كشف، لكن لن تصلهم رسائل حتى تضيف رقم كل واحد منهم مرة واحدة. تجدهم الآن تحت "بدون رقم".</p>
     <div style="max-height:40vh;overflow:auto">${r.missing.map(n=>`<div class="h">${esc(n)}</div>`).join("")}</div>
     <div class="actions"><button class="btn quiet" data-close>حسناً</button></div>`);
 }
@@ -549,9 +556,10 @@ function parsePdfLine(line){
   const amount=nums.length?nums[nums.length-1]:null;
   const name=(rest.match(/[؀-ۿa-zA-Z][؀-ۿa-zA-Z.'\s]*/g)||[]).join(" ")
     .replace(/(شيكل|شيقل|ش\.ج|ILS|NIS|دين|الدين|رصيد|المبلغ|مبلغ|أسبوعي|اسبوعي|شهري)/g," ").replace(/\s+/g," ").trim();
-  if(!name) return null;
+  const nm=cleanName(name);
+  if(!nm||nm.length<2) return null;
   if(!phone&&amount===null) return null;
-  return {name,phone,amount,cyc:/شهر/.test(text)?"شهري":""};
+  return {name:nm,phone,amount,cyc:/شهر/.test(text)?"شهري":""};
 }
 async function importPdf(file){
   toast("جارٍ قراءة ملف PDF…");
