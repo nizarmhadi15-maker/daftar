@@ -288,7 +288,7 @@ function listBodyHTML(){
   const q=query.trim();
   const items=list().filter(d=>(filter==="all"||(filter==="nophone"?!cleanPhone(d.phone):d.cycle===filter))&&matchesQuery(d,q));
   if(!Object.keys(state.debtors).length){
-    return `<div class="list"><div class="empty">الدفتر فارغ. ارفع ملف Excel من الكاشير أو أضف أول زبون.<br>
+    return `<div class="list"><div class="empty">الدفتر فارغ. ارفع كشف الكاشير، أو أضف أول زبون.<br>إذا كانت عندك نسخة احتياطية، ارفع ملف <b class="ltr">${BACKUP_NAME}</b> من مجلد التنزيلات بزر "رفع ملف".<br>
     <button class="btn" data-act="add">إضافة زبون</button> </div></div>`;
   }
   if(!items.length) return `<div class="list"><div class="empty">لا أحد يطابق البحث.</div></div>`;
@@ -370,8 +370,8 @@ function renderSettings(){
   ${simSection()}
   <div class="section"><h3>استيراد من الكاشير</h3><p class="note">ارفع ملف Excel أو PDF، أو الصق القائمة كنص.</p>
   <button class="btn ghost" data-act="import">استيراد قائمة</button></div>
-  <div class="section"><h3>نسخة احتياطية</h3><p class="note">ينسخ كل الزبائن كنص يمكنك حفظه في ملاحظات أو إرساله لنفسك على واتساب.</p>
-  <button class="btn ghost" data-act="export">نسخ القائمة</button></div>
+  <div class="section"><h3>نسخة احتياطية</h3><p class="note">${NATIVE&&NATIVE.saveBackup?`التطبيق يحفظ نسخة تلقائياً في مجلد التنزيلات باسم <b class="ltr">${BACKUP_NAME}</b> بعد كل رفع كشف وكل رقم تضيفه. تبقى النسخة حتى لو حذفت التطبيق. لاسترجاعها: ارفع هذا الملف من زر "رفع ملف" فترجع الأسماء والأرقام والديون.`:"ينسخ كل الزبائن مع أرقامهم كنص تحفظه في ملاحظة أو ترسله لنفسك. لاسترجاعها الصقه في \"استيراد قائمة\"."}</p>
+  <button class="btn ghost" data-act="export">حفظ نسخة احتياطية الآن</button></div>
   <p class="note">${backend.kind==="local"&&NATIVE?"البيانات محفوظة داخل التطبيق على هذا الجوال، خذ نسخة احتياطية بين حين وآخر.":backend.kind==="cloud"?"البيانات محفوظة في حسابك، ولا يراها أحد غيرك.":"البيانات محفوظة على هذا الهاتف فقط، خذ نسخة احتياطية بين حين وآخر."}</p>`;
 }
 
@@ -404,9 +404,11 @@ function formSheet(d){
         obj={id:uid(),name,phone,cycle:s.querySelector("#fCycle").value,balance:bal,created:Date.now(),history:[]};
         if(bal) pushHist(obj,{t:Date.now(),type:"plus",v:bal,note:"رصيد افتتاحي"});
       }else{
-        obj=state.debtors[d.id];Object.assign(obj,{name,phone,cycle:s.querySelector("#fCycle").value});
+        obj=state.debtors[d.id];
+        if(normName(obj.name)!==normName(name)){const al=new Set(obj.aliases||[]);al.add(obj.name);obj.aliases=[...al].slice(-5)}
+        Object.assign(obj,{name,phone,cycle:s.querySelector("#fCycle").value});
       }
-      state.debtors[obj.id]=obj;await backend.saveDebtor(obj);closeSheet();render();toast("تم الحفظ");
+      state.debtors[obj.id]=obj;await backend.saveDebtor(obj);autoBackup();closeSheet();render();toast("تم الحفظ");
       if(!isNew) detailSheet(obj.id);
     };
   });
@@ -460,8 +462,13 @@ function detectCols(rows){
   for(let i=0;i<Math.min(rows.length,5);i++){
     const r=rows[i].map(x=>String(x||"").trim());
     const f=re=>r.findIndex(c=>re.test(c));
-    const n=f(/اسم|الزبون|العميل|name|customer/i), p=f(/رقم|جوال|هاتف|موبايل|تلفون|phone|mobile|tel/i), a=f(/دين|مبلغ|رصيد|المستحق|الباقي|balance|amount|debt|total/i), c=f(/نوع|الفترة|cycle|type/i);
-    if(n>-1&&(p>-1||a>-1)) return {start:i+1,n,p,a,c};
+    const first=(...res)=>{for(const re of res){const k=f(re);if(k>-1) return k}return -1};
+    const code=first(/رقم الزبون|كود|code/i);
+    const n=first(/^(ال)?اسم/,/الاسم|اسم الزبون|name/i,/^(الزبون|العميل|customer)$/i);
+    const p=first(/جوال|موبايل|هاتف|تلفون|phone|mobile|tel/i);
+    const a=first(/الرصيد المتبقي|المتبقي|الباقي|balance/i,/^(ال)?رصيد/,/المستحق|^(ال)?دين$|مبلغ|amount|debt/i);
+    const c=first(/نوع|الفترة|cycle|type/i), al=first(/كما في الكشف/);
+    if(n>-1&&(p>-1||a>-1)) return {start:i+1,n,p,a,c,al,code};
   }
   const sample=rows.slice(0,10), cols=Math.max(...sample.map(r=>r.length),0);
   let p=-1,n=-1,a=-1;
@@ -472,7 +479,7 @@ function detectCols(rows){
     else if(n<0&&vals.some(v=>/[\u0600-\u06FFa-z]/i.test(String(v)))) n=j;
     else if(a<0&&vals.every(v=>!isNaN(toNum(v))&&!isPhone(v))) a=j;
   }
-  return {start:0,n,p,a,c:-1};
+  return {start:0,n,p,a,c:-1,code:-1};
 }
 function isTotalRow(s){return /^(ال)?(اجمالي|إجمالي|أجمالي|مجموع|المجموع|الاجمالي|الإجمالي|المجموع الكلي|total)/i.test(String(s||"").trim())}
 function cleanName(s){return String(s||"").replace(/(^|\s)[A-Za-z](?=\s|$)/g," ").replace(/\s+/g," ").trim()}
@@ -480,17 +487,28 @@ function normName(s){
   return cleanName(s).normalize("NFKC").replace(/[\u064B-\u0652\u0640]/g,"").replace(/[أإآ]/g,"ا").replace(/ة/g,"ه").replace(/ى/g,"ي")
     .replace(/\s+/g," ").trim();
 }
-async function upsertList(items){
-  const byPhone={},byName={};
-  Object.values(state.debtors).forEach(d=>{byPhone[cleanPhone(d.phone)]=d;byName[normName(d.name)]=d});
-  let added=0,updated=0;const missing=[];
+function normCode(s){const m=String(s||"").match(/(\d{1,7})/);return m?"C-"+m[1].padStart(4,"0"):""}
+async function upsertList(items,full){
+  const byPhone={},byName={},byCode={},touched=new Set();
+  Object.values(state.debtors).forEach(d=>{
+    if(d.code) byCode[d.code]=d;
+    if(cleanPhone(d.phone)) byPhone[cleanPhone(d.phone)]=d;
+    byName[normName(d.name)]=d;
+    (d.aliases||[]).forEach(a=>{const k=normName(a);if(k&&!byName[k]) byName[k]=d});
+  });
+  let added=0,updated=0,sum=0;const missing=[];
   for(const it of items){
     const {phone,amount,cyc}=it, name=cleanName(it.name)||it.name, hasAmt=amount!==null&&amount!==undefined;
     if(isTotalRow(name)) continue;
     const cycle=/شهر|month/i.test(cyc||"")?"monthly":/آخر|اخر|other/i.test(cyc||"")?"other":"weekly";
-    let ex=phone?byPhone[cleanPhone(phone)]:null;
-    if(!ex){const byN=byName[normName(name)];if(byN&&(!phone||!cleanPhone(byN.phone))) ex=byN}
+    const code=it.code||"";
+    if(hasAmt) sum+=amount;
+    let ex=code?byCode[code]:null;
+    if(!ex&&phone) ex=byPhone[cleanPhone(phone)];
+    if(!ex){const byN=byName[normName(name)];if(byN&&(!phone||!cleanPhone(byN.phone))&&(!code||!byN.code)&&!touched.has(byN.id)) ex=byN}
     if(ex){
+      touched.add(ex.id);
+      if(code&&!ex.code){ex.code=code;byCode[code]=ex}
       if(phone&&!cleanPhone(ex.phone)){ex.phone=phone;byPhone[cleanPhone(phone)]=ex}
       if(cleanName(ex.name)&&cleanName(ex.name)!==ex.name) ex.name=cleanName(ex.name);
       if(hasAmt&&ex.balance!==amount){pushHist(ex,{t:Date.now(),type:"set",v:amount,note:"تحديث من ملف الكاشير"});ex.balance=amount}
@@ -499,22 +517,66 @@ async function upsertList(items){
     }else{
       const bal=hasAmt?amount:0;
       const d={id:uid(),name,phone:phone||"",cycle,balance:bal,created:Date.now(),history:[]};
+      if(code){d.code=code;byCode[code]=d}
+      touched.add(d.id);
+      if(it.aliases&&it.aliases.length){d.aliases=it.aliases;it.aliases.forEach(a=>{byName[normName(a)]=d})}
       if(bal) pushHist(d,{t:Date.now(),type:"plus",v:bal,note:"رصيد افتتاحي"});
       state.debtors[d.id]=d;if(phone) byPhone[cleanPhone(phone)]=d;byName[normName(name)]=d;await backend.saveDebtor(d);added++;
       if(!phone) missing.push(name);
     }
   }
-  return {added,updated,missing};
+  const absent=full?Object.values(state.debtors).filter(d=>!touched.has(d.id)&&d.balance):[];
+  return {added,updated,missing,sum:Math.round(sum*100)/100,absent:absent.map(d=>d.id)};
 }
-function importDone(r,bad){
+const BACKUP_NAME="rasail-nazr-backup.csv";
+function backupCSV(){
+  const cell=v=>String(v??"").replace(/[,\n\r"]/g," ").trim();
+  return "\uFEFF"+["رقم الزبون,الاسم,رقم الجوال,الدين,النوع,كما في الكشف"].concat(list().map(d=>[cell(d.code),cell(d.name),cell(d.phone),Math.round((d.balance||0)*100)/100,CYCLES[d.cycle]||"",(d.aliases||[]).map(cell).join("|")].join(","))).join("\n");
+}
+let backupTimer=null;
+function autoBackup(){
+  if(!NATIVE||!NATIVE.saveBackup||!Object.keys(state.debtors).length) return;
+  clearTimeout(backupTimer);
+  backupTimer=setTimeout(()=>{try{NATIVE.saveBackup(BACKUP_NAME,backupCSV())}catch(e){}},1500);
+}
+async function manualBackup(){
+  if(NATIVE&&NATIVE.saveBackup){
+    const r=NATIVE.saveBackup(BACKUP_NAME,backupCSV());
+    if(r==="ok"){toast("حُفظت النسخة في التنزيلات باسم "+BACKUP_NAME);return}
+  }
+  const txt=backupCSV().replace(/^\uFEFF/,"");
+  try{await navigator.clipboard.writeText(txt);toast("نُسخت القائمة، الصقها في ملاحظة أو أرسلها لنفسك")}
+  catch(e){openSheet(`<h2>انسخ النص واحفظه</h2><textarea class="field" style="min-height:240px">${esc(txt)}</textarea><div class="actions"><button class="btn quiet" data-close>إغلاق</button></div>`)}
+}
+function importDone(r,bad,stmtTotal){
+  autoBackup();
   closeSheet();tab="list";render();
   const msg=`أُضيف ${r.added}، حُدّث ${r.updated}${bad?`، تُجوهل ${bad} سطر`:""}`;
-  if(!r.missing.length){toast(msg);return}
-  filter="nophone";render();
+  const absent=(r.absent||[]).map(id=>state.debtors[id]).filter(Boolean);
+  const hasTotal=stmtTotal!==null&&stmtTotal!==undefined;
+  if(!r.missing.length&&!absent.length&&!hasTotal){toast(msg);return}
+  const diff=hasTotal?Math.round((stmtTotal-r.sum)*100)/100:0;
+  const appTotal=Math.round(list().reduce((s,d)=>s+(d.balance||0),0)*100)/100;
   openSheet(`<h2>${msg}</h2>
-    <p class="sub">${r.missing.length} زبون أُضيفوا بدون رقم جوال، لأن الكشف لا يحتوي أرقامهم. دينهم محفوظ ويتحدّث مع كل كشف، لكن لن تصلهم رسائل حتى تضيف رقم كل واحد منهم مرة واحدة. تجدهم الآن تحت "بدون رقم".</p>
-    <div style="max-height:40vh;overflow:auto">${r.missing.map(n=>`<div class="h">${esc(n)}</div>`).join("")}</div>
-    <div class="actions"><button class="btn quiet" data-close>حسناً</button></div>`);
+    ${hasTotal?`<div class="card" style="padding:12px 14px;margin:8px 0 12px">
+      <div class="h" style="border:0;padding:2px 0"><span>إجمالي الديون في الكشف</span><b class="v">${fmt(stmtTotal)}</b></div>
+      <div class="h" style="border:0;padding:2px 0"><span>مجموع ما قرأه التطبيق من الكشف</span><b class="v">${fmt(r.sum)}</b></div>
+      <p class="note" style="margin:6px 0 0;color:${Math.abs(diff)<0.05?"var(--paid)":"var(--debt)"}">${Math.abs(diff)<0.05?"✓ المجموعان متطابقان، كل الأسطر قُرئت صحيحاً.":`يوجد فرق ${fmt(diff)}، أرسل الكشف لمراجعته.`}</p>
+    </div>`:""}
+    ${absent.length?`<p class="sub">${absent.length} زبون في التطبيق عليهم دين لكنهم <b>ليسوا في هذا الكشف</b>، لذلك بقي دينهم القديم ومجموع التطبيق ${fmt(appTotal)}. إذا كان الكشف يحتوي كل المدينين، فهؤلاء سدّدوا ويمكن تصفير دينهم.</p>
+      <div style="max-height:22vh;overflow:auto;margin-bottom:8px">${absent.map(d=>`<div class="h"><span>${esc(d.name)}</span><span class="v">${fmt(d.balance)}</span></div>`).join("")}</div>
+      <button class="btn red" id="zeroAbsent" style="width:100%">تصفير دين هؤلاء (${absent.length})</button>`:""}
+    ${r.missing.length?`<p class="sub" style="margin-top:12px">${r.missing.length} زبون جديد أُضيفوا بدون رقم جوال، تجدهم تحت "بدون رقم". أضف رقم كل واحد مرة واحدة فقط.</p>`:""}
+    <div class="actions"><button class="btn quiet" data-close>حسناً</button></div>`,
+  s=>{
+    const z=s.querySelector("#zeroAbsent");
+    if(z) z.onclick=async()=>{
+      if(!confirm(`تصفير دين ${absent.length} زبون ليسوا في الكشف؟`)) return;
+      for(const d of absent){pushHist(d,{t:Date.now(),type:"set",v:0,note:"غير موجود في كشف الكاشير"});d.balance=0;await backend.saveDebtor(d)}
+      autoBackup();closeSheet();render();toast("صُفّر دين "+absent.length+" زبون");
+    };
+  });
+  if(r.missing.length){filter="nophone";render()}
 }
 async function importRows(rows){
   rows=rows.filter(r=>r&&r.some(x=>String(x??"").trim()!==""));
@@ -526,9 +588,11 @@ async function importRows(rows){
     if(/^5\d{8}$/.test(cleanPhone(phone))) phone="0"+cleanPhone(phone); // Excel drops the leading zero
     if(!name||(phone&&!isPhone(phone))||(!phone&&m.a<0)){bad++;continue}
     if(!phone&&String(r[m.a]??"").trim()===""){bad++;continue}
-    items.push({name,phone,amount:m.a>-1?toNum(r[m.a]):null,cyc:m.c>-1?String(r[m.c]??""):""});
+    items.push({name,phone,amount:m.a>-1?toNum(r[m.a]):null,cyc:m.c>-1?String(r[m.c]??""):"",
+      code:m.code>-1?normCode(r[m.code]):"",
+      aliases:m.al>-1?String(r[m.al]??"").split("|").map(x=>x.trim()).filter(Boolean):[]});
   }
-  importDone(await upsertList(items),bad);
+  importDone(await upsertList(items,true),bad);
 }
 
 /* ---------- PDF ---------- */
@@ -564,7 +628,26 @@ function normPhone(raw){
   return /^05\d{8}$/.test(d)?d:"";
 }
 function parsePdfLine(line){
-  let text=line.normalize("NFKC").replace(/[٠-٩]/g,d=>"٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[٫]/g,".");
+  let text=line.normalize("NFKC").replace(/[٠-٩]/g,d=>"٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[٫]/g,".")
+    .replace(/اهلل/g,"الله").replace(/هللا/g,"الله").replace(/ﷲ/g,"الله");
+  // cashier statement row: serial | C-0170 | name | phone | via | debit | paid | remaining
+  const cm=text.match(/\bC\s*-\s*(\d{2,7})\b/i)||text.match(/\b(\d{2,7})\s*-\s*C\b/i);
+  if(cm){
+    const code="C-"+cm[1].padStart(4,"0");
+    const after=text.slice(cm.index+cm[0].length);
+    const pm2=after.match(/(?:\+|00)?(?:970|972)?[\s-]?0?5\d[\s-]?\d{3}[\s-]?\d{4}/);
+    const money=[...after.matchAll(/-?\(?\d[\d,]*\.\d{1,2}\)?/g)];
+    let stop=after.length;
+    if(pm2) stop=Math.min(stop,pm2.index);
+    if(money.length) stop=Math.min(stop,money[0].index);
+    const nm=cleanName(after.slice(0,stop).replace(/\s+/g," "));
+    if(nm&&!isTotalRow(nm)&&money.length){
+      const last=money[money.length-1][0];
+      let amt=Number(last.replace(/[(),]/g,""));
+      if(/^\(.*\)$/.test(last)) amt=-Math.abs(amt);
+      return {name:nm,phone:pm2?normPhone(pm2[0]):"",amount:isNaN(amt)?null:amt,cyc:"",code};
+    }
+  }
   const pm=text.match(/(?:\+|00)?(?:970|972)?[\s-]?0?5\d[\s-]?\d{3}[\s-]?\d{4}/);
   const phone=pm?normPhone(pm[0]):"";
   let rest=(pm?text.replace(pm[0]," "):text).replace(/\d{1,4}[\/.\-]\d{1,2}[\/.\-]\d{1,4}/g," ").replace(/\d{1,2}:\d{2}/g," ");
@@ -574,6 +657,7 @@ function parsePdfLine(line){
     .replace(/(شيكل|شيقل|ش\.ج|ILS|NIS|دين|الدين|رصيد|المبلغ|مبلغ|أسبوعي|اسبوعي|شهري)/g," ").replace(/\s+/g," ").trim();
   const nm=cleanName(name);
   if(!nm||nm.length<2||isTotalRow(nm)) return null;
+  if(!/[\u0600-\u06FF]/.test(nm)&&(nm.length<3||/^(AM|PM)$/i.test(nm))) return null;
   if(!phone&&amount===null) return null;
   return {name:nm,phone,amount,cyc:/شهر/.test(text)?"شهري":""};
 }
@@ -582,17 +666,33 @@ async function importPdf(file){
   try{await ensurePdf()}catch(e){toast("تعذّر تحميل قارئ PDF، تحقق من الإنترنت");return}
   let lines;
   try{lines=await pdfLines(await file.arrayBuffer())}catch(e){toast("ملف PDF غير مقروء");return}
-  const seen={},items=[];
-  for(const l of lines){const it=parsePdfLine(l);if(!it) continue;const k=it.phone||normName(it.name);if(!seen[k]){seen[k]=1;items.push(it)}}
+  const seen={},items=[];let stmtTotal=null;
+  for(const l of lines){
+    const t=l.normalize("NFKC");
+    if(isTotalRow(t.replace(/[\d.,\s-]+/g," ").trim())||/(اجمالي|إجمالي|أجمالي|المجموع)/.test(t)&&!/C\s*-\s*\d/i.test(t)){
+      const nums=(t.match(/-?[\d,]+\.\d{1,2}|-?\d[\d,]*/g)||[]).map(x=>Number(x.replace(/,/g,""))).filter(x=>!isNaN(x));
+      if(nums.length) stmtTotal=Math.max(...nums);
+      continue;
+    }
+    const it=parsePdfLine(l);if(!it) continue;
+    const k=it.code||it.phone||normName(it.name);
+    if(!seen[k]){seen[k]=1;items.push(it)}
+  }
+  // when the statement has customer codes, every real row has one; drop headers, footers and page numbers
+  if(items.some(i=>i.code)) for(let i=items.length-1;i>=0;i--) if(!items[i].code) items.splice(i,1);
   if(!items.length){
     toast(lines.length?"لم أجد أسماء مع ديون في الملف":"الملف صورة ممسوحة وليس فيه نص، صدّره من الكاشير كـ PDF نصي أو Excel");
     return;
   }
-  importDone(await upsertList(items),0);
+  importDone(await upsertList(items,true),0,stmtTotal);
 }
 async function importFile(file){
   if(!file) return;
   if(/\.pdf$/i.test(file.name||"")||file.type==="application/pdf") return importPdf(file);
+  if(/\.csv$/i.test(file.name||"")||file.type==="text/csv"){
+    try{const txt=(await file.text()).replace(/^\uFEFF/,"");return importRows(txt.split(/\r?\n/).map(l=>l.split(/,|\t|;/).map(x=>x.trim())))}
+    catch(e){toast("الملف غير مقروء");return}
+  }
   if(!window.XLSX){toast("تعذّر تحميل قارئ Excel، تحقق من الإنترنت");return}
   toast("جارٍ قراءة الملف…");
   try{
@@ -764,10 +864,7 @@ function bindView(){
     else if(a==="saveSettings"){
       state.settings={...state.settings,shop:$("#sShop").value.trim()||DEFAULT_SETTINGS.shop,currency:$("#sCur").value.trim(),template:$("#sTpl").value.trim()||DEFAULT_SETTINGS.template};
       await backend.saveSettings();toast("حُفظت الإعدادات");render();
-    }else if(a==="export"){
-      const txt=list().map(d=>[d.name,d.phone,d.balance,CYCLES[d.cycle]].join(", ")).join("\n");
-      try{await navigator.clipboard.writeText(txt);toast("نُسخت القائمة")}catch(e){openSheet(`<h2>انسخ النص</h2><textarea class="field" style="min-height:240px">${esc(txt)}</textarea><div class="actions"><button class="btn quiet" data-close>إغلاق</button></div>`)}
-    }
+    }else if(a==="export") manualBackup();
   });
 }
 document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{tab=b.dataset.tab;closeSheet();render();window.scrollTo(0,0)});
@@ -776,7 +873,7 @@ window.onSimPermission=()=>{if(tab==="settings") render()};
 $("#wakeBtn").onclick=()=>{if(confirm("رفع وضع السكون وإعادة تشغيل التطبيق؟")) setSleep(false)};
 
 initStorage().then(async()=>{
-  for(const d of Object.values(state.debtors)) if(isTotalRow(d.name)&&!cleanPhone(d.phone)){delete state.debtors[d.id];await backend.deleteDebtor(d.id)}
+  for(const d of Object.values(state.debtors)) if((isTotalRow(d.name)||/^(AM|PM)$/i.test(String(d.name).trim()))&&!cleanPhone(d.phone)){delete state.debtors[d.id];await backend.deleteDebtor(d.id)}
   if(NATIVE&&NATIVE.isSleep&&NATIVE.isSleep()==="yes") state.settings={...state.settings,sleep:true};
   else if(NATIVE&&NATIVE.setSleep&&isSleeping()) NATIVE.setSleep(true);
   applySleep();
